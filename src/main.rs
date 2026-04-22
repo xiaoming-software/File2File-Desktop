@@ -847,6 +847,17 @@ impl File2FileApp {
                 .to_string();
             return;
         }
+        if let Some(current) = self.current_user.as_ref()
+            && peer == current.trim()
+        {
+            self.modal_error = self
+                .tr(
+                    "目标 Token 不能是当前登录 Token",
+                    "Peer Token cannot be the current login Token",
+                )
+                .to_string();
+            return;
+        }
         let permission = self.modal_permission.trim().to_string();
         self.modal_error.clear();
         self.open_session_busy = true;
@@ -2120,7 +2131,7 @@ fn webrpc_send_data(handle: usize, session_id: u32, text: &str) -> Result<(), St
             session_id,
             c.as_ptr() as *mut c_char,
             text.len() as i32,
-            5000,
+            10000,
         )
     };
     if ret == 1 {
