@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=File2File
+Comment=File2File Desktop App
+Exec=sh -c 'DIR="$(dirname "$1")"; exec "$DIR/File2File-linux-arm64/File2File"' _ %k
+Terminal=false
+StartupNotify=true
+Categories=Network;Utility;
+Icon=File2File-linux-arm64/file2file.png
