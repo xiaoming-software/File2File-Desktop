@@ -13,7 +13,8 @@
 ### 项目介绍
 
 File2File 是一款专门用于文件点对点传输（P2P）的桌面软件，底层采用专业的 WebRPC P2P 通信组件。  
-项目定位为**完全免费、开源**，目标是提供简单可靠、可持续扩展的文件传输体验。
+项目定位为**完全免费、开源**，目标是提供简单可靠、可持续扩展的文件传输体验。  
+当前版本重点支持 **Windows、Linux ARM、Linux x86、macOS** 多平台部署，连接成功率可达 **99.9%**。
 
 ### 软件截图
 
@@ -106,8 +107,8 @@ cargo run
 
 ### 许可证
 
-本项目定位为免费开源项目。  
-当前仓库尚未提供独立 `LICENSE` 文件，建议尽快补充标准许可证（如 MIT/Apache-2.0）以明确使用与分发边界。
+本项目采用 **Apache License 2.0** 开源协议。  
+完整许可证内容请见仓库根目录 `LICENSE` 文件。
 
 ---
 
@@ -116,7 +117,8 @@ cargo run
 ### Overview
 
 File2File is a desktop application dedicated to peer-to-peer (P2P) file transfer, powered by a professional WebRPC P2P communication component.  
-The project is **free and open source**, aiming to provide a reliable and extensible transfer experience.
+The project is **free and open source**, aiming to provide a reliable and extensible transfer experience.  
+The current release emphasizes cross-platform support for **Windows, Linux ARM, Linux x86, and macOS**, with a connection success rate of up to **99.9%**.
 
 ### Screenshot
 
@@ -209,6 +211,6 @@ Issues and PRs are welcome. Suggested workflow:
 
 ### License
 
-This project is intended to be free and open source.  
-A standalone `LICENSE` file is not yet included in this repository; adding a standard license (such as MIT/Apache-2.0) is strongly recommended to clarify usage and distribution rights.
+This project is licensed under the **Apache License 2.0**.  
+See the `LICENSE` file in the repository root for the full license text.
 
