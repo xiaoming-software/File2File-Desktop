@@ -92,6 +92,7 @@ extern int WebrpcClient_LoginStatus(GoUintptr handle);
 extern int WebrpcClient_GetReceivePort(GoUintptr handle);
 extern unsigned int WebrpcClient_OpenSession(GoUintptr handle, char* toToken, char* permission);
 extern short unsigned int WebrpcClient_SessionSize(GoUintptr handle);
+extern char* WebrpcClient_TarTokenBySession(GoUintptr handle, unsigned int sessionId);
 extern int WebrpcClient_CloseSession(GoUintptr handle, unsigned int sessionId);
 extern int WebrpcClient_SendData(GoUintptr handle, unsigned int sessionId, char* data, int dataLen, long long int timeOut);
 extern int WebrpcClient_SendFile(GoUintptr handle, unsigned int sessionId, char* filePath);

@@ -1,6 +1,6 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
-use std::ffi::{CString, c_char};
+use std::ffi::{CStr, CString, c_char};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
@@ -251,6 +251,7 @@ struct File2FileApp {
     login_token: String,
     login_password: String,
     login_permission: String,
+    active_login_permission: String,
     show_login_password: bool,
     show_login_permission: bool,
     remember_token: bool,
@@ -300,6 +301,7 @@ impl File2FileApp {
             login_token: String::new(),
             login_password: String::new(),
             login_permission: String::new(),
+            active_login_permission: String::new(),
             show_login_password: false,
             show_login_permission: false,
             remember_token: true,
@@ -343,13 +345,24 @@ impl File2FileApp {
         self.chat_sessions.iter().position(|s| s.id == sid)
     }
 
+    fn peer_token_for_session_info(&self, sid: u32, fallback: &str) -> String {
+        let Some(handle) = self.client_handle else {
+            return fallback.to_string();
+        };
+        match webrpc_tar_token_by_session(handle, sid) {
+            Ok(token) if !token.trim().is_empty() => token,
+            _ => fallback.to_string(),
+        }
+    }
+
     fn ensure_session_for_inbound(&mut self, sid: u32) -> usize {
         if let Some(i) = self.find_session_index_by_id(sid) {
             return i;
         }
+        let peer_token = self.peer_token_for_session_info(sid, "");
         self.chat_sessions.push(WebrpcChatSession {
             id: sid,
-            peer_token: format!("remote-{sid}"),
+            peer_token,
             permission: String::new(),
             messages: Vec::new(),
         });
@@ -442,6 +455,7 @@ impl File2FileApp {
                 self.is_logging_in = false;
                 self.client_handle = Some(handle);
                 self.current_user = Some(self.login_token.trim().to_string());
+                self.active_login_permission = self.login_permission.trim().to_string();
                 self.login_password.clear();
                 self.login_permission.clear();
                 self.show_login_password = false;
@@ -1286,7 +1300,17 @@ impl eframe::App for File2FileApp {
                 ));
                 if let Some(h) = self.client_handle {
                     let n = webrpc_session_size(h);
-                    ui.label(format!("{}: {n}", self.tr("SDK 会话数", "SDK sessions")));
+                    let login_perm = if self.active_login_permission.is_empty() {
+                        self.tr("空", "empty").to_string()
+                    } else {
+                        self.active_login_permission.clone()
+                    };
+                    ui.label(format!(
+                        "{}: {n} · {}: {}",
+                        self.tr("SDK 会话数", "SDK sessions"),
+                        self.tr("登录口令", "Login permission"),
+                        login_perm
+                    ));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let lang_btn = match self.ui_lang {
@@ -1328,6 +1352,7 @@ impl eframe::App for File2FileApp {
                         self.show_new_session_modal = false;
                         self.current_user = None;
                         self.login_password.clear();
+                        self.active_login_permission.clear();
                         self.login_message.clear();
                         self.login_error = false;
                         self.composer_input.clear();
@@ -1378,18 +1403,21 @@ impl eframe::App for File2FileApp {
                 ui.separator();
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     for i in 0..self.chat_sessions.len() {
-                        let s = &self.chat_sessions[i];
+                        let (sid, cached_peer) = {
+                            let s = &self.chat_sessions[i];
+                            (s.id, s.peer_token.clone())
+                        };
+                        let peer = self.peer_token_for_session_info(sid, &cached_peer);
+                        if peer != cached_peer {
+                            self.chat_sessions[i].peer_token = peer.clone();
+                        }
+                        let display_peer = if peer.trim().is_empty() {
+                            self.tr("对端", "Peer").to_string()
+                        } else {
+                            peer
+                        };
                         let is_selected = self.selected_session == Some(i);
-                        let label = format!(
-                            "{}\nSID {} · {}",
-                            s.peer_token.clone(),
-                            s.id,
-                            if s.permission.is_empty() {
-                                "perm ∅".to_string()
-                            } else {
-                                format!("perm {}", mask_token(&s.permission))
-                            }
-                        );
+                        let label = format!("{}\nSID {}", display_peer, sid);
                         let card_fill = if is_selected {
                             egui::Color32::from_rgb(30, 92, 132)
                         } else {
@@ -1433,18 +1461,19 @@ impl eframe::App for File2FileApp {
             if let Some(index) = self.selected_session {
                 let meta = self.chat_sessions.get(index).map(|s| {
                     (
-                        s.peer_token.clone(),
                         s.id,
+                        s.peer_token.clone(),
                         s.permission.clone(),
                         s.messages.clone(),
                     )
                 });
-                if let Some((peer_mask, sid, perm, messages)) = meta {
+                if let Some((sid, fallback_peer, perm, messages)) = meta {
+                    let peer_token = self.peer_token_for_session_info(sid, &fallback_peer);
                     let close_idx = index;
                     ui.horizontal(|ui| {
                         ui.heading(
                             egui::RichText::new(format!(
-                                "{} {peer_mask}",
+                                "{} {peer_token}",
                                 self.tr("与", "Chat with")
                             ))
                                 .color(egui::Color32::from_rgb(215, 218, 255)),
@@ -1607,17 +1636,23 @@ impl eframe::App for File2FileApp {
                                             });
                                             match msg.kind {
                                                 MessageKind::Text => {
-                                                    ui.label(
-                                                        egui::RichText::new(&msg.content)
-                                                            .color(text_color)
-                                                            .size(16.5),
+                                                    ui.add(
+                                                        egui::Label::new(
+                                                            egui::RichText::new(&msg.content)
+                                                                .color(text_color)
+                                                                .size(16.5),
+                                                        )
+                                                        .wrap_mode(egui::TextWrapMode::Wrap),
                                                     );
                                                 }
                                                 MessageKind::File => {
-                                                    ui.label(
-                                                        egui::RichText::new(&msg.content)
-                                                            .color(text_color)
-                                                            .size(16.5),
+                                                    ui.add(
+                                                        egui::Label::new(
+                                                            egui::RichText::new(&msg.content)
+                                                                .color(text_color)
+                                                                .size(16.5),
+                                                        )
+                                                        .wrap_mode(egui::TextWrapMode::Wrap),
                                                     );
                                                     if let Some(path) = &msg.file_path
                                                         && ui
@@ -1740,28 +1775,47 @@ impl eframe::App for File2FileApp {
                                 .unwrap_or(&path)
                                 .to_string();
                             ui.horizontal(|ui| {
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{}: {}",
-                                        self.tr("附件", "Attachment"),
-                                        file_name
-                                    ))
-                                        .small()
-                                        .color(egui::Color32::from_rgb(180, 220, 255)),
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui
+                                            .add(
+                                                egui::Button::new(
+                                                    egui::RichText::new(
+                                                        self.tr(
+                                                            "移除附件",
+                                                            "Remove attachment",
+                                                        ),
+                                                    )
+                                                    .color(egui::Color32::from_rgb(
+                                                        255, 235, 242,
+                                                    )),
+                                                )
+                                                .fill(egui::Color32::from_rgb(119, 42, 76))
+                                                .stroke(egui::Stroke::new(
+                                                    1.0,
+                                                    egui::Color32::from_rgb(215, 115, 156),
+                                                )),
+                                            )
+                                            .clicked()
+                                        {
+                                            self.pending_file_path = None;
+                                        }
+                                        ui.add_space(8.0);
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(format!(
+                                                    "{}: {}",
+                                                    self.tr("附件", "Attachment"),
+                                                    file_name
+                                                ))
+                                                .small()
+                                                .color(egui::Color32::from_rgb(180, 220, 255)),
+                                            )
+                                            .wrap_mode(egui::TextWrapMode::Wrap),
+                                        );
+                                    },
                                 );
-                                if ui
-                                    .add(
-                                        egui::Button::new(
-                                            egui::RichText::new(self.tr("移除附件", "Remove attachment"))
-                                                .color(egui::Color32::from_rgb(255, 235, 242)),
-                                        )
-                                        .fill(egui::Color32::from_rgb(119, 42, 76))
-                                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(215, 115, 156))),
-                                    )
-                                    .clicked()
-                                {
-                                    self.pending_file_path = None;
-                                }
                             });
                         } else {
                             ui.label(
@@ -1880,16 +1934,6 @@ fn format_file_size(bytes: u64) -> String {
     } else {
         format!("{bytes} B")
     }
-}
-
-fn mask_token(token: &str) -> String {
-    let chars: Vec<char> = token.chars().collect();
-    if chars.len() <= 8 {
-        return "***".to_string();
-    }
-    let start: String = chars.iter().take(4).collect();
-    let end: String = chars.iter().rev().take(4).rev().collect();
-    format!("{start}****{end}")
 }
 
 /// 与 Go 示例一致：`New` 后周期查询 `LoginStatus`，直到返回值 **非 0**，再调用 `GetReceivePort`。
@@ -2192,6 +2236,24 @@ fn webrpc_session_size(_handle: usize) -> u16 {
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+fn webrpc_tar_token_by_session(handle: usize, session_id: u32) -> Result<String, String> {
+    let ptr = unsafe { WebrpcClient_TarTokenBySession(handle, session_id) };
+    if ptr.is_null() {
+        return Err("TarTokenBySession 返回空指针".to_string());
+    }
+    let token = unsafe { CStr::from_ptr(ptr) }
+        .to_string_lossy()
+        .trim()
+        .to_string();
+    Ok(token)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn webrpc_tar_token_by_session(_handle: usize, _session_id: u32) -> Result<String, String> {
+    Err("未接入 webrpc".into())
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 unsafe extern "C" {
     fn WebrpcClient_New(token: *mut c_char, passwd: *mut c_char, permission: *mut c_char)
     -> usize;
@@ -2203,6 +2265,7 @@ unsafe extern "C" {
         permission: *mut c_char,
     ) -> u32;
     fn WebrpcClient_SessionSize(handle: usize) -> u16;
+    fn WebrpcClient_TarTokenBySession(handle: usize, session_id: u32) -> *mut c_char;
     fn WebrpcClient_CloseSession(handle: usize, session_id: u32) -> i32;
     fn WebrpcClient_SendData(
         handle: usize,

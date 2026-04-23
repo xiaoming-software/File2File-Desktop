@@ -105,6 +105,7 @@ extern __declspec(dllexport) int WebrpcClient_GetReceivePort(GoUintptr handle);
 //
 extern __declspec(dllexport) unsigned int WebrpcClient_OpenSession(GoUintptr handle, char* toToken, char* permission);
 extern __declspec(dllexport) short unsigned int WebrpcClient_SessionSize(GoUintptr handle);
+extern __declspec(dllexport) char* WebrpcClient_TarTokenBySession(GoUintptr handle, unsigned int sessionId);
 extern __declspec(dllexport) int WebrpcClient_CloseSession(GoUintptr handle, unsigned int sessionId);
 extern __declspec(dllexport) int WebrpcClient_SendData(GoUintptr handle, unsigned int sessionId, char* data, int dataLen, long long int timeOut);
 extern __declspec(dllexport) int WebrpcClient_SendFile(GoUintptr handle, unsigned int sessionId, char* filePath);
