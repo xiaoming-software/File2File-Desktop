@@ -5,10 +5,11 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use chrono::Local;
@@ -21,6 +22,8 @@ const EMBEDDED_LOGO_BYTES: &[u8] = include_bytes!("../assets/file2file_logo.png"
 const EMBEDDED_ICON_BYTES: &[u8] = include_bytes!("../assets/file2file_icon.ico");
 const TOPBAR_LOGO_SIZE: [f32; 2] = [170.0, 30.0];
 const APP_DATA_DIR_NAME: &str = "file2file_data";
+const LOGIN_ALPHA: u8 = 179;
+const SESSION_ALPHA: u8 = 222;
 
 fn user_workspace_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
@@ -53,7 +56,15 @@ fn main() -> eframe::Result<()> {
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([480.0, 520.0])
         .with_min_inner_size([480.0, 520.0])
+        .with_transparent(true)
         .with_resizable(false);
+    #[cfg(target_os = "macos")]
+    {
+        viewport = viewport
+            .with_fullsize_content_view(true)
+            .with_titlebar_shown(false)
+            .with_title_shown(false);
+    }
     if let Some(icon_data) = load_app_icon_data() {
         viewport = viewport.with_icon(icon_data);
     }
@@ -63,7 +74,7 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "File2File文件传输",
+        "File2File",
         options,
         Box::new(|cc| {
             install_cjk_fonts(&cc.egui_ctx);
@@ -204,8 +215,25 @@ struct ChatMessage {
     content: String,
     timestamp: String,
     kind: MessageKind,
+    file_name: Option<String>,
     file_path: Option<String>,
+    file_size_bytes: Option<u64>,
+    transferred_bytes: Option<u64>,
+    send_started_at: Option<Instant>,
+    send_speed_bps: Option<f64>,
+    recv_speed_bps: Option<f64>,
     outbound: Option<OutboundState>,
+}
+
+#[derive(Debug, Clone)]
+enum FileTransferSignal {
+    Start { name: String, size_bytes: u64 },
+    Progress {
+        name: String,
+        size_bytes: u64,
+        transferred_bytes: u64,
+    },
+    End { name: String, size_bytes: u64, ok: bool },
 }
 
 /// 与 webrpc `OpenSession` 对应的本地会话（内存态，退出登录后清空）。
@@ -226,6 +254,12 @@ enum InboundUiEvent {
         name: String,
         path: PathBuf,
         size_bytes: u64,
+    },
+    PeerFileProgress {
+        session_id: u32,
+        name: String,
+        size_bytes: u64,
+        received_bytes: u64,
     },
     SendResult {
         session_id: u32,
@@ -276,6 +310,13 @@ struct File2FileApp {
     modal_error: String,
     open_session_busy: bool,
     open_session_rx: Option<mpsc::Receiver<Result<(u32, String, String), String>>>,
+    inbound_file_start_marks: HashMap<String, Instant>,
+    inbound_file_speed_cache: HashMap<String, f64>,
+    /// 接收端「累计已接收字节」：按 `(session|name)` 记录实时累计值，避免被后续事件覆盖。
+    inbound_received_bytes: HashMap<String, u64>,
+    /// 接收端「一次文件传输」UI 路由键：`session_id|规范化文件名`（不用字节大小，避免与流长度不一致导致重复气泡）
+    inbound_active_file_row: HashMap<String, u64>,
+    outbound_file_msg_index: HashMap<String, u64>,
     next_local_msg_id: u64,
     ui_lang: UiLanguage,
 }
@@ -323,6 +364,11 @@ impl File2FileApp {
             modal_error: String::new(),
             open_session_busy: false,
             open_session_rx: None,
+            inbound_file_start_marks: HashMap::new(),
+            inbound_file_speed_cache: HashMap::new(),
+            inbound_received_bytes: HashMap::new(),
+            inbound_active_file_row: HashMap::new(),
+            outbound_file_msg_index: HashMap::new(),
             next_local_msg_id: 1,
             ui_lang: UiLanguage::Zh,
         }
@@ -339,6 +385,211 @@ impl File2FileApp {
         let id = self.next_local_msg_id;
         self.next_local_msg_id = self.next_local_msg_id.saturating_add(1);
         id
+    }
+
+    fn file_timing_key(session_id: u32, file_name: &str, size_bytes: u64) -> String {
+        format!("{session_id}|{file_name}|{size_bytes}")
+    }
+
+    /// 接收端「同一会话 + 同一文件名」唯一键（一次传输一条气泡；大小以事件为准更新到消息体）。
+    fn inbound_row_key(session_id: u32, name: &str) -> String {
+        format!("{session_id}|{}", normalize_transfer_file_name(name))
+    }
+
+    /// 仅按「会话 + 文件名」在聊天记录里找最近一条对端文件气泡（不比较 size，避免与流长度不一致）。
+    fn find_inbound_file_message_local_id_by_name(
+        &self,
+        session_id: u32,
+        name: &str,
+    ) -> Option<u64> {
+        let s = self.chat_sessions.iter().find(|s| s.id == session_id)?;
+        for m in s.messages.iter().rev() {
+            if m.is_me || !matches!(m.kind, MessageKind::File) {
+                continue;
+            }
+            let name_ok = m
+                .file_path
+                .as_deref()
+                .and_then(|p| Path::new(p).file_name())
+                .and_then(|f| f.to_str())
+                .map(|f| f == name)
+                .unwrap_or(false)
+                || m.content.contains(name);
+            if name_ok {
+                return Some(m.local_id);
+            }
+        }
+        None
+    }
+
+    /// START 或首次进度/落盘：保证该 `(session, name)` 只有一条接收气泡并登记到 `inbound_active_file_row`。
+    fn ensure_inbound_active_file_row(
+        &mut self,
+        session_id: u32,
+        name: &str,
+        size_bytes: u64,
+    ) -> u64 {
+        let row_key = Self::inbound_row_key(session_id, name);
+        if let Some(&id) = self.inbound_active_file_row.get(&row_key) {
+            return id;
+        }
+        let local_id = self.alloc_local_msg_id();
+        let i = self.ensure_session_for_inbound(session_id);
+        let content = self.format_received_file_content(name, size_bytes, None);
+        self.chat_sessions[i].messages.push(ChatMessage {
+            local_id,
+            is_me: false,
+            content,
+            timestamp: now_str(),
+            kind: MessageKind::File,
+            file_name: Some(name.to_string()),
+            file_path: None,
+            file_size_bytes: Some(size_bytes),
+            transferred_bytes: Some(0),
+            send_started_at: None,
+            send_speed_bps: None,
+            recv_speed_bps: None,
+            outbound: None,
+        });
+        self.inbound_active_file_row.insert(row_key, local_id);
+        local_id
+    }
+
+    /// 当前传输对应的气泡 `local_id`：活跃表 → 已有消息 → 新建（仅最后一种会 push）。
+    fn resolve_inbound_file_local_id(
+        &mut self,
+        session_id: u32,
+        name: &str,
+        size_bytes: u64,
+    ) -> u64 {
+        let row_key = Self::inbound_row_key(session_id, name);
+        if let Some(&id) = self.inbound_active_file_row.get(&row_key) {
+            return id;
+        }
+        if let Some(id) = self.find_inbound_file_message_local_id_by_name(session_id, name) {
+            self.inbound_active_file_row.insert(row_key, id);
+            return id;
+        }
+        self.ensure_inbound_active_file_row(session_id, name, size_bytes)
+    }
+
+    fn format_received_file_content(
+        &self,
+        name: &str,
+        size_bytes: u64,
+        _speed_bps: Option<f64>,
+    ) -> String {
+        let recv_file_text = self
+            .tr("对端发来文件", "Received file from peer")
+            .to_string();
+        let size_text = format_file_size(size_bytes);
+        format!("{recv_file_text}: {name} ({size_text})")
+    }
+
+    fn apply_inbound_file_end_signal(
+        &mut self,
+        session_id: u32,
+        name: &str,
+        size_bytes: u64,
+        ok: bool,
+    ) {
+        let row_key = Self::inbound_row_key(session_id, name);
+        if !ok {
+            self.inbound_file_start_marks.remove(&row_key);
+            self.inbound_received_bytes.remove(&row_key);
+            self.inbound_active_file_row.remove(&row_key);
+            return;
+        }
+        let Some(started_at) = self.inbound_file_start_marks.remove(&row_key) else {
+            self.inbound_received_bytes.remove(&row_key);
+            self.inbound_active_file_row.remove(&row_key);
+            return;
+        };
+        // 结束态必须给出最终速度，避免文件已完成仍显示“计算中”。
+        let elapsed_secs = started_at.elapsed().as_secs_f64().max(0.001);
+        let final_received = self.inbound_received_bytes.get(&row_key).copied().unwrap_or(size_bytes);
+        let speed_bps = Some(final_received as f64 / elapsed_secs);
+        let content = self.format_received_file_content(name, size_bytes, speed_bps);
+        let local_id_opt = self.inbound_active_file_row.remove(&row_key);
+        let local_id = local_id_opt
+            .or_else(|| self.find_inbound_file_message_local_id_by_name(session_id, name));
+        if let Some(local_id) = local_id {
+            if let Some(s) = self.chat_sessions.iter_mut().find(|s| s.id == session_id)
+                && let Some(msg) = s.messages.iter_mut().find(|m| m.local_id == local_id)
+            {
+                msg.recv_speed_bps = speed_bps;
+                msg.content = content;
+                msg.file_size_bytes = Some(size_bytes);
+                return;
+            }
+        }
+        if let Some(spd) = speed_bps {
+            self.inbound_file_speed_cache.insert(row_key, spd);
+        }
+    }
+
+    fn apply_outbound_file_progress_signal(
+        &mut self,
+        session_id: u32,
+        name: &str,
+        size_bytes: u64,
+        transferred_bytes: u64,
+    ) {
+        let key = Self::file_timing_key(session_id, name, size_bytes);
+        let Some(local_id) = self.outbound_file_msg_index.get(&key).copied() else {
+            return;
+        };
+        if let Some(s) = self.chat_sessions.iter_mut().find(|s| s.id == session_id)
+            && let Some(msg) = s.messages.iter_mut().find(|m| m.local_id == local_id)
+            && let Some(started_at) = msg.send_started_at
+        {
+            let elapsed_secs = started_at.elapsed().as_secs_f64().max(0.001);
+            msg.send_speed_bps = Some(transferred_bytes as f64 / elapsed_secs);
+            msg.transferred_bytes = Some(transferred_bytes);
+        }
+    }
+
+    fn apply_inbound_file_progress(
+        &mut self,
+        session_id: u32,
+        name: &str,
+        size_bytes: u64,
+        received_bytes: u64,
+    ) {
+        let row_key = Self::inbound_row_key(session_id, name);
+        let started_at = self
+            .inbound_file_start_marks
+            .entry(row_key.clone())
+            .or_insert_with(Instant::now);
+        let elapsed_secs = started_at.elapsed().as_secs_f64();
+        let speed_bps = if elapsed_secs >= 1.0 {
+            Some(received_bytes as f64 / elapsed_secs)
+        } else {
+            None
+        };
+        let content = self.format_received_file_content(name, size_bytes, speed_bps);
+        let tracked_received = {
+            let entry = self
+                .inbound_received_bytes
+                .entry(row_key.clone())
+                .or_insert(received_bytes);
+            *entry = (*entry).max(received_bytes);
+            *entry
+        };
+        let local_id = self.resolve_inbound_file_local_id(session_id, name, size_bytes);
+        let i = self.ensure_session_for_inbound(session_id);
+        if let Some(msg) = self.chat_sessions[i]
+            .messages
+            .iter_mut()
+            .find(|m| m.local_id == local_id)
+        {
+            msg.content = content;
+            msg.timestamp = now_str();
+            msg.file_name = Some(name.to_string());
+            msg.recv_speed_bps = speed_bps.or(msg.recv_speed_bps);
+            msg.file_size_bytes = Some(size_bytes);
+            msg.transferred_bytes = Some(tracked_received);
+        }
     }
 
     fn find_session_index_by_id(&self, sid: u32) -> Option<usize> {
@@ -473,6 +724,10 @@ impl File2FileApp {
                 self.selected_session = None;
                 self.composer_input.clear();
                 self.pending_file_path = None;
+                self.inbound_file_start_marks.clear();
+                self.inbound_file_speed_cache.clear();
+                self.inbound_active_file_row.clear();
+                self.outbound_file_msg_index.clear();
                 self.show_new_session_modal = false;
                 self.save_data();
                 let (tx_in, rx_in) = mpsc::channel();
@@ -523,6 +778,27 @@ impl File2FileApp {
         self.style_initialized = true;
     }
 
+    fn apply_page_alpha_style(&self, ctx: &egui::Context, alpha: u8) {
+        let mut style = (*ctx.style()).clone();
+        style.visuals.extreme_bg_color = egui::Color32::from_rgba_unmultiplied(10, 34, 52, alpha);
+        style.visuals.faint_bg_color = egui::Color32::from_rgba_unmultiplied(8, 26, 40, alpha);
+        style.visuals.widgets.noninteractive.bg_fill =
+            egui::Color32::from_rgba_unmultiplied(12, 30, 46, alpha);
+        style.visuals.widgets.inactive.bg_fill =
+            egui::Color32::from_rgba_unmultiplied(12, 46, 68, alpha);
+        style.visuals.widgets.hovered.bg_fill =
+            egui::Color32::from_rgba_unmultiplied(20, 66, 95, alpha);
+        style.visuals.widgets.active.bg_fill =
+            egui::Color32::from_rgba_unmultiplied(24, 82, 115, alpha);
+        style.visuals.widgets.inactive.bg_stroke =
+            egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(110, 208, 244, alpha));
+        style.visuals.widgets.hovered.bg_stroke =
+            egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(135, 226, 255, alpha));
+        style.visuals.widgets.active.bg_stroke =
+            egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(150, 236, 255, alpha));
+        ctx.set_style(style);
+    }
+
     fn ensure_logo_texture(&mut self, ctx: &egui::Context) {
         if self.logo_texture.is_some() {
             return;
@@ -569,7 +845,7 @@ impl File2FileApp {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::default()
-                    .fill(egui::Color32::from_rgb(13, 24, 39))
+                    .fill(egui::Color32::from_rgba_unmultiplied(4, 8, 18, LOGIN_ALPHA))
                     .inner_margin(egui::Margin::same(0)),
             )
             .show(ctx, |ui| {
@@ -583,8 +859,11 @@ impl File2FileApp {
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
                             egui::Frame::default()
-                                .fill(egui::Color32::from_rgb(11, 31, 46))
-                                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(48, 136, 178)))
+                                .fill(egui::Color32::from_rgba_unmultiplied(12, 42, 62, LOGIN_ALPHA))
+                                .stroke(egui::Stroke::new(
+                                    1.5,
+                                    egui::Color32::from_rgba_unmultiplied(110, 220, 255, LOGIN_ALPHA),
+                                ))
                                 .inner_margin(egui::Margin::same(14))
                                 .corner_radius(12.0)
                                 .show(ui, |ui| {
@@ -593,7 +872,15 @@ impl File2FileApp {
                                         .max_height((ui.available_height() - 4.0).max(220.0))
                                         .show(ui, |ui| {
                                             egui::Frame::default()
-                                                .fill(egui::Color32::from_rgb(20, 19, 47))
+                                                .fill(egui::Color32::from_rgba_unmultiplied(
+                                                    36, 32, 78, LOGIN_ALPHA,
+                                                ))
+                                                .stroke(egui::Stroke::new(
+                                                    1.0,
+                                                    egui::Color32::from_rgba_unmultiplied(
+                                                        160, 140, 255, LOGIN_ALPHA,
+                                                    ),
+                                                ))
                                                 .corner_radius(9.0)
                                                 .inner_margin(egui::Margin::symmetric(10, 8))
                                                 .show(ui, |ui| {
@@ -705,10 +992,10 @@ impl File2FileApp {
                                                             })
                                                             .color(egui::Color32::from_rgb(221, 243, 255)),
                                                         )
-                                                        .fill(egui::Color32::from_rgb(52, 59, 112))
+                                                        .fill(egui::Color32::from_rgba_unmultiplied(52, 59, 112, LOGIN_ALPHA))
                                                         .stroke(egui::Stroke::new(
                                                             1.0,
-                                                            egui::Color32::from_rgb(124, 141, 221),
+                                                            egui::Color32::from_rgba_unmultiplied(124, 141, 221, LOGIN_ALPHA),
                                                         )),
                                                     )
                                                     .clicked()
@@ -754,10 +1041,10 @@ impl File2FileApp {
                                                             })
                                                             .color(egui::Color32::from_rgb(221, 243, 255)),
                                                         )
-                                                        .fill(egui::Color32::from_rgb(52, 59, 112))
+                                                        .fill(egui::Color32::from_rgba_unmultiplied(52, 59, 112, LOGIN_ALPHA))
                                                         .stroke(egui::Stroke::new(
                                                             1.0,
-                                                            egui::Color32::from_rgb(124, 141, 221),
+                                                            egui::Color32::from_rgba_unmultiplied(124, 141, 221, LOGIN_ALPHA),
                                                         )),
                                                     )
                                                     .clicked()
@@ -790,10 +1077,10 @@ impl File2FileApp {
                                                         } else {
                                                             self.tr("登录", "Login")
                                                         })
-                                                        .fill(egui::Color32::from_rgb(27, 126, 173))
+                                                        .fill(egui::Color32::from_rgba_unmultiplied(27, 126, 173, LOGIN_ALPHA))
                                                         .stroke(egui::Stroke::new(
                                                             1.0,
-                                                            egui::Color32::from_rgb(122, 216, 248),
+                                                            egui::Color32::from_rgba_unmultiplied(122, 216, 248, LOGIN_ALPHA),
                                                         ))
                                                         .wrap_mode(egui::TextWrapMode::Extend)
                                                         .min_size(egui::vec2(190.0, 42.0)),
@@ -899,7 +1186,13 @@ impl File2FileApp {
                     ),
                     timestamp: now_str(),
                     kind: MessageKind::Text,
+                    file_name: None,
                     file_path: None,
+                    file_size_bytes: None,
+                    transferred_bytes: None,
+                    send_started_at: None,
+                    send_speed_bps: None,
+                    recv_speed_bps: None,
                     outbound: None,
                 };
                 if let Some(i) = self.find_session_index_by_id(sid) {
@@ -956,6 +1249,44 @@ impl File2FileApp {
             got_event = true;
             match ev {
                 InboundUiEvent::PeerText { session_id, text } => {
+                    if let Some(signal) = parse_file_transfer_signal(&text) {
+                        match signal {
+                            FileTransferSignal::Start { name, size_bytes } => {
+                                let row_key = Self::inbound_row_key(session_id, &name);
+                                // 每次 START 都视为一次全新传输：重置计时/累计并清理磁盘缓存文件。
+                                self.inbound_file_start_marks
+                                    .insert(row_key.clone(), Instant::now());
+                                self.inbound_received_bytes.remove(&row_key);
+                                let cached = Self::ensure_app_root()
+                                    .join("received_files")
+                                    .join(normalize_transfer_file_name(&name));
+                                if cached.exists() {
+                                    let _ = fs::remove_file(cached);
+                                }
+                                self.ensure_inbound_active_file_row(session_id, &name, size_bytes);
+                            }
+                            FileTransferSignal::Progress {
+                                name,
+                                size_bytes,
+                                transferred_bytes,
+                            } => {
+                                self.apply_outbound_file_progress_signal(
+                                    session_id,
+                                    &name,
+                                    size_bytes,
+                                    transferred_bytes,
+                                );
+                            }
+                            FileTransferSignal::End {
+                                name,
+                                size_bytes,
+                                ok,
+                            } => {
+                                self.apply_inbound_file_end_signal(session_id, &name, size_bytes, ok);
+                            }
+                        }
+                        continue;
+                    }
                     let local_id = self.alloc_local_msg_id();
                     let i = self.ensure_session_for_inbound(session_id);
                     self.chat_sessions[i].messages.push(ChatMessage {
@@ -964,7 +1295,13 @@ impl File2FileApp {
                         content: text,
                         timestamp: now_str(),
                         kind: MessageKind::Text,
+                        file_name: None,
                         file_path: None,
+                        file_size_bytes: None,
+                        transferred_bytes: None,
+                        send_started_at: None,
+                        send_speed_bps: None,
+                        recv_speed_bps: None,
                         outbound: None,
                     });
                 }
@@ -975,38 +1312,44 @@ impl File2FileApp {
                     size_bytes,
                 } => {
                     let p = path.display().to_string();
-                    let i = self.ensure_session_for_inbound(session_id);
-                    let recv_file_text = self
-                        .tr("对端发来文件", "Received file from peer")
-                        .to_string();
-                    let size_text = format_file_size(size_bytes);
-                    let content = format!("{recv_file_text}: {name} ({size_text})");
+                    let row_key = Self::inbound_row_key(session_id, &name);
+                    let cached_speed = self.inbound_file_speed_cache.remove(&row_key);
+                    let content = self.format_received_file_content(&name, size_bytes, cached_speed);
                     let now = now_str();
-                    let existing = self.chat_sessions[i].messages.iter_mut().find(|m| {
-                        !m.is_me
-                            && matches!(m.kind, MessageKind::File)
-                            && m.file_path
-                                .as_deref()
-                                .and_then(|fp| Path::new(fp).file_name())
-                                .and_then(|f| f.to_str())
-                                .map(|f| f == name)
-                                .unwrap_or(false)
-                    });
-                    if let Some(msg) = existing {
+                    let local_id =
+                        self.resolve_inbound_file_local_id(session_id, &name, size_bytes);
+                    let i = self.ensure_session_for_inbound(session_id);
+                    if let Some(msg) = self.chat_sessions[i]
+                        .messages
+                        .iter_mut()
+                        .find(|m| m.local_id == local_id)
+                    {
                         msg.content = content;
                         msg.timestamp = now;
-                    } else {
-                        let local_id = self.alloc_local_msg_id();
-                        self.chat_sessions[i].messages.push(ChatMessage {
-                            local_id,
-                            is_me: false,
-                            content,
-                            timestamp: now,
-                            kind: MessageKind::File,
-                            file_path: Some(p),
-                            outbound: None,
-                        });
+                        msg.file_name = Some(name.clone());
+                        msg.recv_speed_bps = cached_speed.or(msg.recv_speed_bps);
+                        msg.file_size_bytes = Some(size_bytes);
+                        let tracked = self.inbound_received_bytes.remove(&row_key);
+                        msg.transferred_bytes =
+                            Some(tracked.or(msg.transferred_bytes).unwrap_or(size_bytes));
+                        msg.file_path = Some(p);
                     }
+                    // 落盘完成，结束本次「传输会话」路由，下一轮 START 再建新索引
+                    self.inbound_received_bytes.remove(&row_key);
+                    self.inbound_active_file_row.remove(&row_key);
+                }
+                InboundUiEvent::PeerFileProgress {
+                    session_id,
+                    name,
+                    size_bytes,
+                    received_bytes,
+                } => {
+                    self.apply_inbound_file_progress(
+                        session_id,
+                        &name,
+                        size_bytes,
+                        received_bytes,
+                    );
                 }
                 InboundUiEvent::SendResult {
                     session_id,
@@ -1016,11 +1359,32 @@ impl File2FileApp {
                 } => {
                     if let Some(s) = self.chat_sessions.iter_mut().find(|s| s.id == session_id) {
                         if let Some(m) = s.messages.iter_mut().find(|m| m.local_id == local_id) {
-                            m.outbound = Some(if ok {
-                                OutboundState::Sent
+                            if ok {
+                                if let (Some(total_bytes), Some(started_at)) =
+                                    (m.file_size_bytes, m.send_started_at)
+                                {
+                                    let elapsed_secs = started_at.elapsed().as_secs_f64().max(0.001);
+                                    m.send_speed_bps = Some(total_bytes as f64 / elapsed_secs);
+                                }
+                                m.transferred_bytes = m.file_size_bytes;
+                                m.outbound = Some(OutboundState::Sent);
                             } else {
-                                OutboundState::Failed(detail.clone())
-                            });
+                                m.outbound = Some(OutboundState::Failed(detail.clone()));
+                            }
+                            m.send_started_at = None;
+                            if let (Some(size_bytes), Some(path)) = (m.file_size_bytes, &m.file_path)
+                            {
+                                if let Some(file_name) =
+                                    Path::new(path).file_name().and_then(|f| f.to_str())
+                                {
+                                    let key = Self::file_timing_key(
+                                        session_id,
+                                        &normalize_transfer_file_name(file_name),
+                                        size_bytes,
+                                    );
+                                    self.outbound_file_msg_index.remove(&key);
+                                }
+                            }
                         }
                     }
                     if ok {
@@ -1078,22 +1442,60 @@ impl File2FileApp {
             }
             let local_id = self.alloc_local_msg_id();
             let sending_file_text = self.tr("发送文件中", "Sending file").to_string();
+            let file_size_bytes = fs::metadata(&path).ok().map(|meta| meta.len());
+            let display_name = path
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or(path_str.as_str());
             self.chat_sessions[index].messages.push(ChatMessage {
                 local_id,
                 is_me: true,
-                content: format!("{sending_file_text}: {}", path.display()),
+                content: format!("{sending_file_text}: {display_name}"),
                 timestamp: now_str(),
                 kind: MessageKind::File,
+                file_name: Some(display_name.to_string()),
                 file_path: Some(path_str.clone()),
+                file_size_bytes,
+                transferred_bytes: Some(0),
+                send_started_at: Some(Instant::now()),
+                send_speed_bps: None,
+                recv_speed_bps: None,
                 outbound: Some(OutboundState::Sending),
             });
+            if let Some(size_bytes) = file_size_bytes
+                && let Some(file_name) = path.file_name().and_then(|f| f.to_str())
+            {
+                let key = Self::file_timing_key(
+                    sid,
+                    &normalize_transfer_file_name(file_name),
+                    size_bytes,
+                );
+                self.outbound_file_msg_index.insert(key, local_id);
+            }
             self.status = self.tr("文件发送中…", "File is being sent...").to_string();
             self.pending_file_path = None;
 
             let tx = self.inbound_tx.clone();
             let send_ok_text = self.tr("发送成功", "Sent successfully").to_string();
             thread::spawn(move || {
+                let file_name = Path::new(&path_str)
+                    .file_name()
+                    .and_then(|f| f.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                let file_name = normalize_transfer_file_name(&file_name);
+                let size_bytes = fs::metadata(&path_str).map(|meta| meta.len()).unwrap_or(0);
+                let _ = webrpc_send_data(
+                    handle,
+                    sid,
+                    &build_file_transfer_signal_start(&file_name, size_bytes),
+                );
                 let result = webrpc_send_file(handle, sid, &path_str);
+                let _ = webrpc_send_data(
+                    handle,
+                    sid,
+                    &build_file_transfer_signal_end(&file_name, size_bytes, result.is_ok()),
+                );
                 if let Some(t) = tx {
                     let (ok, detail) = match result {
                         Ok(()) => (true, send_ok_text),
@@ -1124,7 +1526,13 @@ impl File2FileApp {
             content: content.clone(),
             timestamp: now_str(),
             kind: MessageKind::Text,
+            file_name: None,
             file_path: None,
+            file_size_bytes: None,
+            transferred_bytes: None,
+            send_started_at: None,
+            send_speed_bps: None,
+            recv_speed_bps: None,
             outbound: Some(OutboundState::Sending),
         });
         self.composer_input.clear();
@@ -1180,9 +1588,12 @@ impl File2FileApp {
         }
     }
 
-    /// 统一释放 webrpc 客户端句柄，避免重复释放。
+    /// 统一释放 webrpc：先 `CloseSession` 关闭本地仍记录的会话，再 `WebrpcClient_Free` 回收客户端，避免重复释放。
     fn release_webrpc_client(&mut self) {
         if let Some(handle) = self.client_handle.take() {
+            for s in &self.chat_sessions {
+                let _ = webrpc_close_session(handle, s.id);
+            }
             webrpc_free(handle);
         }
     }
@@ -1195,9 +1606,11 @@ impl eframe::App for File2FileApp {
         self.ensure_logo_texture(ctx);
         self.poll_login_worker(ctx);
         if self.current_user.is_none() {
+            self.apply_page_alpha_style(ctx, LOGIN_ALPHA);
             self.draw_login_page(ctx);
             return;
         }
+        self.apply_page_alpha_style(ctx, SESSION_ALPHA);
 
         self.poll_open_session_worker(ctx);
         self.poll_inbound_events(ctx);
@@ -1210,6 +1623,16 @@ impl eframe::App for File2FileApp {
                 .collapsible(false)
                 .resizable(true)
                 .default_width(420.0)
+                .frame(
+                    egui::Frame::default()
+                        .fill(egui::Color32::from_rgba_unmultiplied(6, 20, 36, SESSION_ALPHA))
+                        .stroke(egui::Stroke::new(
+                            1.0,
+                            egui::Color32::from_rgba_unmultiplied(90, 210, 255, SESSION_ALPHA),
+                        ))
+                        .corner_radius(10.0)
+                        .inner_margin(egui::Margin::same(14)),
+                )
                 .show(ctx, |ui| {
                     if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                         self.show_new_session_modal = false;
@@ -1278,8 +1701,11 @@ impl eframe::App for File2FileApp {
         egui::TopBottomPanel::top("top")
             .frame(
                 egui::Frame::default()
-                    .fill(egui::Color32::from_rgb(9, 20, 34))
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(44, 98, 132)))
+                    .fill(egui::Color32::from_rgba_unmultiplied(9, 20, 34, SESSION_ALPHA))
+                    .stroke(egui::Stroke::new(
+                        1.0,
+                        egui::Color32::from_rgba_unmultiplied(60, 160, 210, SESSION_ALPHA),
+                    ))
                     .inner_margin(egui::Margin::symmetric(14, 10)),
             )
             .show(ctx, |ui| {
@@ -1377,8 +1803,11 @@ impl eframe::App for File2FileApp {
             .min_width(220.0)
             .frame(
                 egui::Frame::default()
-                    .fill(egui::Color32::from_rgb(10, 31, 45))
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 133, 176)))
+                    .fill(egui::Color32::from_rgba_unmultiplied(8, 28, 44, SESSION_ALPHA))
+                    .stroke(egui::Stroke::new(
+                        1.0,
+                        egui::Color32::from_rgba_unmultiplied(70, 190, 240, SESSION_ALPHA),
+                    ))
                     .inner_margin(egui::Margin::same(12)),
             )
             .show(ctx, |ui| {
@@ -1391,8 +1820,11 @@ impl eframe::App for File2FileApp {
                     .add_sized(
                         [ui.available_width(), 36.0],
                         egui::Button::new(self.tr("＋ 新建会话", "+ New Session"))
-                            .fill(egui::Color32::from_rgb(20, 84, 120))
-                            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(96, 186, 225))),
+                            .fill(egui::Color32::from_rgba_unmultiplied(18, 90, 130, SESSION_ALPHA))
+                            .stroke(egui::Stroke::new(
+                                1.0,
+                                egui::Color32::from_rgba_unmultiplied(120, 210, 255, SESSION_ALPHA),
+                            )),
                     )
                     .clicked()
                 {
@@ -1419,9 +1851,9 @@ impl eframe::App for File2FileApp {
                         let is_selected = self.selected_session == Some(i);
                         let label = format!("{}\nSID {}", display_peer, sid);
                         let card_fill = if is_selected {
-                            egui::Color32::from_rgb(30, 92, 132)
+                            egui::Color32::from_rgba_unmultiplied(28, 100, 145, SESSION_ALPHA)
                         } else {
-                            egui::Color32::from_rgb(14, 47, 68)
+                            egui::Color32::from_rgba_unmultiplied(12, 52, 78, SESSION_ALPHA)
                         };
                         if ui
                             .add_sized(
@@ -1435,9 +1867,9 @@ impl eframe::App for File2FileApp {
                                 .stroke(egui::Stroke::new(
                                     1.0,
                                     if is_selected {
-                                        egui::Color32::from_rgb(120, 221, 255)
+                                        egui::Color32::from_rgba_unmultiplied(130, 230, 255, SESSION_ALPHA)
                                     } else {
-                                        egui::Color32::from_rgb(52, 124, 162)
+                                        egui::Color32::from_rgba_unmultiplied(55, 140, 185, SESSION_ALPHA)
                                     },
                                 )),
                             )
@@ -1453,8 +1885,11 @@ impl eframe::App for File2FileApp {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::default()
-                    .fill(egui::Color32::from_rgb(20, 19, 47))
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(95, 92, 191)))
+                    .fill(egui::Color32::from_rgba_unmultiplied(20, 19, 47, SESSION_ALPHA))
+                    .stroke(egui::Stroke::new(
+                        1.0,
+                        egui::Color32::from_rgba_unmultiplied(130, 165, 255, SESSION_ALPHA),
+                    ))
                     .inner_margin(egui::Margin::same(14)),
             )
             .show(ctx, |ui| {
@@ -1536,10 +1971,10 @@ impl eframe::App for File2FileApp {
                                 ) = if msg.is_me {
                                     (
                                         self.tr("我", "Me"),
-                                        egui::Color32::from_rgb(30, 136, 229),
+                                        egui::Color32::from_rgba_unmultiplied(30, 136, 229, SESSION_ALPHA),
                                         egui::Color32::from_rgb(252, 254, 255),
                                         egui::Color32::from_rgb(216, 232, 255),
-                                        egui::Color32::from_rgb(20, 92, 173),
+                                        egui::Color32::from_rgba_unmultiplied(20, 92, 173, SESSION_ALPHA),
                                         egui::Color32::from_rgb(182, 255, 207),
                                         egui::Color32::from_rgb(255, 232, 158),
                                         egui::Color32::from_rgb(255, 196, 196),
@@ -1547,10 +1982,10 @@ impl eframe::App for File2FileApp {
                                 } else {
                                     (
                                         self.tr("对方", "Peer"),
-                                        egui::Color32::from_rgb(236, 240, 247),
+                                        egui::Color32::from_rgba_unmultiplied(236, 240, 247, SESSION_ALPHA),
                                         egui::Color32::from_rgb(24, 30, 44),
                                         egui::Color32::from_rgb(98, 108, 125),
-                                        egui::Color32::from_rgb(94, 113, 142),
+                                        egui::Color32::from_rgba_unmultiplied(94, 113, 142, SESSION_ALPHA),
                                         egui::Color32::from_rgb(72, 180, 120),
                                         egui::Color32::from_rgb(220, 160, 60),
                                         egui::Color32::from_rgb(220, 90, 90),
@@ -1562,7 +1997,7 @@ impl eframe::App for File2FileApp {
                                     egui::Layout::left_to_right(egui::Align::TOP)
                                 };
                                 ui.with_layout(row_layout, |ui| {
-                                    let bubble_max = (ui.available_width() * 0.72).clamp(220.0, 560.0);
+                                    let bubble_max = (ui.available_width() * 0.58).min(420.0);
                                     egui::Frame::default()
                                         .fill(avatar_fill)
                                         .corner_radius(999.0)
@@ -1585,55 +2020,60 @@ impl eframe::App for File2FileApp {
                                         .inner_margin(egui::Margin::symmetric(14, 10))
                                         .show(ui, |ui| {
                                             ui.set_max_width(bubble_max);
-                                            ui.horizontal(|ui| {
-                                                ui.label(
-                                                    egui::RichText::new(who)
-                                                        .small()
-                                                        .strong()
-                                                        .color(text_color),
-                                                );
-                                                ui.label(
-                                                    egui::RichText::new(&msg.timestamp)
-                                                        .small()
-                                                        .color(meta_color),
-                                                );
-                                                if msg.is_me {
-                                                    if let Some(state) = &msg.outbound {
-                                                        match state {
-                                                            OutboundState::Sending => {
-                                                                ui.label(
-                                                                    egui::RichText::new(self.tr(
-                                                                        "发送中",
-                                                                        "Sending",
-                                                                    ))
+                                            if matches!(msg.kind, MessageKind::Text) {
+                                                ui.horizontal(|ui| {
+                                                    ui.label(
+                                                        egui::RichText::new(who)
+                                                            .small()
+                                                            .strong()
+                                                            .color(text_color),
+                                                    );
+                                                    ui.label(
+                                                        egui::RichText::new(&msg.timestamp)
+                                                            .small()
+                                                            .color(meta_color),
+                                                    );
+                                                    if msg.is_me {
+                                                        if let Some(state) = &msg.outbound {
+                                                            match state {
+                                                                OutboundState::Sending => {
+                                                                    ui.label(
+                                                                        egui::RichText::new(self.tr(
+                                                                            "发送中",
+                                                                            "Sending",
+                                                                        ))
+                                                                            .small()
+                                                                            .color(status_warn_color),
+                                                                    );
+                                                                }
+                                                                OutboundState::Sent => {
+                                                                    ui.label(
+                                                                        egui::RichText::new(self.tr(
+                                                                            "已发送",
+                                                                            "Sent",
+                                                                        ))
+                                                                            .small()
+                                                                            .color(status_ok_color),
+                                                                    );
+                                                                }
+                                                                OutboundState::Failed(detail) => {
+                                                                    ui.label(
+                                                                        egui::RichText::new(format!(
+                                                                            "{}: {detail}",
+                                                                            self.tr(
+                                                                                "发送失败",
+                                                                                "Send failed",
+                                                                            )
+                                                                        ))
                                                                         .small()
-                                                                        .color(status_warn_color),
-                                                                );
-                                                            }
-                                                            OutboundState::Sent => {
-                                                                ui.label(
-                                                                    egui::RichText::new(self.tr(
-                                                                        "已发送",
-                                                                        "Sent",
-                                                                    ))
-                                                                        .small()
-                                                                        .color(status_ok_color),
-                                                                );
-                                                            }
-                                                            OutboundState::Failed(detail) => {
-                                                                ui.label(
-                                                                    egui::RichText::new(format!(
-                                                                        "{}: {detail}",
-                                                                        self.tr("发送失败", "Send failed")
-                                                                    ))
-                                                                    .small()
-                                                                    .color(status_err_color),
-                                                                );
+                                                                        .color(status_err_color),
+                                                                    );
+                                                                }
                                                             }
                                                         }
                                                     }
-                                                }
-                                            });
+                                                });
+                                            }
                                             match msg.kind {
                                                 MessageKind::Text => {
                                                     ui.add(
@@ -1646,50 +2086,137 @@ impl eframe::App for File2FileApp {
                                                     );
                                                 }
                                                 MessageKind::File => {
-                                                    ui.add(
-                                                        egui::Label::new(
-                                                            egui::RichText::new(&msg.content)
-                                                                .color(text_color)
-                                                                .size(16.5),
+                                                    let role = if msg.is_me {
+                                                        self.tr("发送", "Send")
+                                                    } else {
+                                                        self.tr("接收", "Receive")
+                                                    };
+                                                    let speed_text = if msg.is_me {
+                                                        msg.send_speed_bps
+                                                            .map(format_transfer_speed)
+                                                            .unwrap_or_else(|| {
+                                                                self.tr("计算中…", "calculating…")
+                                                                    .to_string()
+                                                            })
+                                                    } else {
+                                                        msg.recv_speed_bps
+                                                            .map(format_transfer_speed)
+                                                            .unwrap_or_else(|| {
+                                                                self.tr("计算中…", "calculating…")
+                                                                    .to_string()
+                                                            })
+                                                    };
+                                                    let transferred_bytes =
+                                                        msg.transferred_bytes.unwrap_or(0);
+                                                    let transferred_human =
+                                                        format_file_size(transferred_bytes);
+                                                    let transferred_text = if msg.is_me {
+                                                        format!(
+                                                            "{}: {} ({} B)",
+                                                            self.tr("已发送", "Sent"),
+                                                            transferred_human,
+                                                            transferred_bytes
                                                         )
-                                                        .wrap_mode(egui::TextWrapMode::Wrap),
-                                                    );
-                                                    if let Some(path) = &msg.file_path
-                                                        && ui
-                                                            .add(
-                                                                egui::Button::new(
-                                                                    egui::RichText::new(self.tr(
-                                                                        "打开目录",
-                                                                        "Open Folder",
-                                                                    ))
-                                                                        .color(egui::Color32::from_rgb(
-                                                                            224, 246, 255,
-                                                                        )),
-                                                                )
-                                                                .fill(egui::Color32::from_rgb(
-                                                                    26, 98, 136,
-                                                                ))
-                                                                .stroke(egui::Stroke::new(
-                                                                    1.0,
-                                                                    egui::Color32::from_rgb(
-                                                                        104, 199, 236,
-                                                                    ),
-                                                                )),
-                                                            )
-                                                            .clicked()
-                                                    {
-                                                        let target = Path::new(path)
-                                                            .parent()
-                                                            .map(|p| p.to_path_buf())
-                                                            .unwrap_or_else(|| PathBuf::from(path));
-                                                        if let Err(err) = opener::open(target) {
-                                                            open_err =
-                                                                Some(format!(
-                                                                    "{}: {err}",
-                                                                    self.tr("打开失败", "Open failed")
-                                                                ));
+                                                    } else {
+                                                        format!(
+                                                            "{}: {} ({} B)",
+                                                            self.tr("已接收", "Received"),
+                                                            transferred_human,
+                                                            transferred_bytes
+                                                        )
+                                                    };
+                                                    let state_text = if msg.is_me {
+                                                        match msg.outbound.as_ref() {
+                                                            Some(OutboundState::Sending) => (
+                                                                self.tr("发送中", "Sending"),
+                                                                status_warn_color,
+                                                            ),
+                                                            Some(OutboundState::Sent) => (
+                                                                self.tr("完成", "Done"),
+                                                                status_ok_color,
+                                                            ),
+                                                            Some(OutboundState::Failed(_)) => (
+                                                                self.tr("失败", "Failed"),
+                                                                status_err_color,
+                                                            ),
+                                                            None => (
+                                                                self.tr("发送中", "Sending"),
+                                                                status_warn_color,
+                                                            ),
                                                         }
+                                                    } else if msg.file_path.is_some() {
+                                                        (self.tr("完成", "Done"), status_ok_color)
+                                                    } else {
+                                                        (
+                                                            self.tr("接收中", "Receiving"),
+                                                            status_warn_color,
+                                                        )
                                                     }
+                                                    .0;
+                                                    // 第1行：单行文本（非列布局）
+                                                    ui.scope(|ui| {
+                                                        let line1 = format!(
+                                                            "{} {} | {} | {} | {}",
+                                                            role, &msg.timestamp, speed_text, transferred_text, state_text
+                                                        );
+                                                        ui.add(
+                                                            egui::Label::new(
+                                                                egui::RichText::new(line1)
+                                                                    .small()
+                                                                    .color(meta_color),
+                                                            )
+                                                            .wrap_mode(egui::TextWrapMode::Truncate),
+                                                        );
+                                                    });
+
+                                                    // 第2行：文件名（自动换行）
+                                                    let file_name = msg.file_name.as_deref().unwrap_or(
+                                                        msg.content
+                                                            .split(':')
+                                                            .next_back()
+                                                            .map(str::trim)
+                                                            .unwrap_or(&msg.content),
+                                                    );
+                                                    ui.scope(|ui| {
+                                                        ui.add(
+                                                            egui::Label::new(
+                                                                egui::RichText::new(file_name)
+                                                                    .color(text_color)
+                                                                    .size(16.5),
+                                                            )
+                                                            .wrap_mode(egui::TextWrapMode::Wrap),
+                                                        );
+                                                    });
+
+                                                    // 第3行：绿色下划线“打开”
+                                                    let open_label = egui::RichText::new(self.tr("打开", "Open"))
+                                                        .small()
+                                                        .underline()
+                                                        .color(egui::Color32::from_rgb(139, 58, 98));
+                                                    ui.scope(|ui| {
+                                                        if let Some(path) = &msg.file_path {
+                                                            let open_clicked = ui
+                                                                .add(
+                                                                    egui::Label::new(open_label)
+                                                                        .sense(egui::Sense::click()),
+                                                                )
+                                                                .clicked();
+                                                            if open_clicked {
+                                                                let target = Path::new(path)
+                                                                    .parent()
+                                                                    .map(|p| p.to_path_buf())
+                                                                    .unwrap_or_else(|| PathBuf::from(path));
+                                                                if let Err(err) = opener::open(target) {
+                                                                    open_err = Some(format!(
+                                                                        "{}: {err}",
+                                                                        self.tr("打开失败", "Open failed")
+                                                                    ));
+                                                                }
+                                                            }
+                                                        } else {
+                                                            ui.label(open_label.weak());
+                                                        }
+                                                    });
                                                 }
                                             }
                                         });
@@ -1703,7 +2230,15 @@ impl eframe::App for File2FileApp {
 
                     ui.add_space(8.0);
                     ui.separator();
-                    ui.group(|ui| {
+                    egui::Frame::default()
+                        .fill(egui::Color32::from_rgba_unmultiplied(10, 30, 48, SESSION_ALPHA))
+                        .stroke(egui::Stroke::new(
+                            1.0,
+                            egui::Color32::from_rgba_unmultiplied(95, 200, 240, SESSION_ALPHA),
+                        ))
+                        .corner_radius(10.0)
+                        .inner_margin(egui::Margin::same(10))
+                        .show(ui, |ui| {
                         ui.label(
                             egui::RichText::new(self.tr("发送区（文本/文件）", "Send Area (Text/File)"))
                                 .strong(),
@@ -1746,8 +2281,11 @@ impl eframe::App for File2FileApp {
                                         egui::RichText::new(self.tr("选择文件", "Choose File"))
                                             .color(egui::Color32::from_rgb(221, 244, 255)),
                                     )
-                                    .fill(egui::Color32::from_rgb(29, 95, 133))
-                                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(111, 198, 230))),
+                                    .fill(egui::Color32::from_rgba_unmultiplied(29, 95, 133, SESSION_ALPHA))
+                                    .stroke(egui::Stroke::new(
+                                        1.0,
+                                        egui::Color32::from_rgba_unmultiplied(111, 198, 230, SESSION_ALPHA),
+                                    )),
                                 )
                                 .clicked()
                                 && let Some(path) = rfd::FileDialog::new().pick_file()
@@ -1760,8 +2298,11 @@ impl eframe::App for File2FileApp {
                                         egui::RichText::new(send_label)
                                             .color(egui::Color32::from_rgb(235, 249, 255)),
                                     )
-                                    .fill(egui::Color32::from_rgb(28, 126, 173))
-                                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(123, 216, 248))),
+                                    .fill(egui::Color32::from_rgba_unmultiplied(28, 126, 173, SESSION_ALPHA))
+                                    .stroke(egui::Stroke::new(
+                                        1.0,
+                                        egui::Color32::from_rgba_unmultiplied(123, 216, 248, SESSION_ALPHA),
+                                    )),
                                 )
                                 .clicked()
                             {
@@ -1791,10 +2332,10 @@ impl eframe::App for File2FileApp {
                                                         255, 235, 242,
                                                     )),
                                                 )
-                                                .fill(egui::Color32::from_rgb(119, 42, 76))
+                                                .fill(egui::Color32::from_rgba_unmultiplied(119, 42, 76, SESSION_ALPHA))
                                                 .stroke(egui::Stroke::new(
                                                     1.0,
-                                                    egui::Color32::from_rgb(215, 115, 156),
+                                                    egui::Color32::from_rgba_unmultiplied(215, 115, 156, SESSION_ALPHA),
                                                 )),
                                             )
                                             .clicked()
@@ -1816,7 +2357,7 @@ impl eframe::App for File2FileApp {
                                         );
                                     },
                                 );
-                            });
+                        });
                         } else {
                             ui.label(
                                 egui::RichText::new(self.tr(
@@ -1908,6 +2449,11 @@ impl eframe::App for File2FileApp {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.release_webrpc_client();
     }
+
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        // 透明清屏色：让未被面板覆盖的区域透出系统桌面/后景窗口。
+        egui::Color32::TRANSPARENT.to_normalized_gamma_f32()
+    }
 }
 
 impl Drop for File2FileApp {
@@ -1933,6 +2479,91 @@ fn format_file_size(bytes: u64) -> String {
         format!("{:.2} KB", bytes as f64 / KB as f64)
     } else {
         format!("{bytes} B")
+    }
+}
+
+fn format_transfer_speed(bytes_per_sec: f64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+
+    if bytes_per_sec >= GB {
+        format!("{:.2} GB/s", bytes_per_sec / GB)
+    } else if bytes_per_sec >= MB {
+        format!("{:.2} MB/s", bytes_per_sec / MB)
+    } else if bytes_per_sec >= KB {
+        format!("{:.2} KB/s", bytes_per_sec / KB)
+    } else {
+        format!("{:.0} B/s", bytes_per_sec.max(0.0))
+    }
+}
+
+const FILE_TRANSFER_SIGNAL_PREFIX: &str = "__F2F_FILE_SIGNAL__";
+
+fn encode_signal_field(input: &str) -> String {
+    input.replace('%', "%25").replace('|', "%7C")
+}
+
+fn decode_signal_field(input: &str) -> String {
+    input.replace("%7C", "|").replace("%25", "%")
+}
+
+fn normalize_transfer_file_name(input: &str) -> String {
+    input.chars()
+        .filter(|c| *c != '/' && *c != '\\' && *c != ':' && *c != '\0')
+        .collect()
+}
+
+fn build_file_transfer_signal_start(file_name: &str, size_bytes: u64) -> String {
+    format!(
+        "{FILE_TRANSFER_SIGNAL_PREFIX}|START|{}|{size_bytes}",
+        encode_signal_field(file_name)
+    )
+}
+
+fn build_file_transfer_signal_progress(
+    file_name: &str,
+    size_bytes: u64,
+    transferred_bytes: u64,
+) -> String {
+    format!(
+        "{FILE_TRANSFER_SIGNAL_PREFIX}|PROGRESS|{}|{size_bytes}|{transferred_bytes}",
+        encode_signal_field(file_name)
+    )
+}
+
+fn build_file_transfer_signal_end(file_name: &str, size_bytes: u64, ok: bool) -> String {
+    let status = if ok { "OK" } else { "FAIL" };
+    format!(
+        "{FILE_TRANSFER_SIGNAL_PREFIX}|END|{}|{size_bytes}|{status}",
+        encode_signal_field(file_name)
+    )
+}
+
+fn parse_file_transfer_signal(text: &str) -> Option<FileTransferSignal> {
+    let mut parts = text.split('|');
+    if parts.next()? != FILE_TRANSFER_SIGNAL_PREFIX {
+        return None;
+    }
+    let kind = parts.next()?;
+    let name = decode_signal_field(parts.next()?);
+    let size_bytes = parts.next()?.parse::<u64>().ok()?;
+    match kind {
+        "START" => Some(FileTransferSignal::Start { name, size_bytes }),
+        "PROGRESS" => Some(FileTransferSignal::Progress {
+            name,
+            size_bytes,
+            transferred_bytes: parts.next()?.parse::<u64>().ok()?,
+        }),
+        "END" => {
+            let ok = matches!(parts.next(), Some("OK"));
+            Some(FileTransferSignal::End {
+                name,
+                size_bytes,
+                ok,
+            })
+        }
+        _ => None,
     }
 }
 
@@ -2000,7 +2631,7 @@ fn spawn_webrpc_callback_thread(handle: usize, port: i32, inbound_tx: mpsc::Send
 
 /// 与 Go `startReceivingCallbackData` 相同：连接 `127.0.0.1:port`，按大端解析帧。
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-fn webrpc_callback_tcp_loop(_handle: usize, port: u16, inbound_tx: mpsc::Sender<InboundUiEvent>) {
+fn webrpc_callback_tcp_loop(handle: usize, port: u16, inbound_tx: mpsc::Sender<InboundUiEvent>) {
     let addr = format!("127.0.0.1:{port}");
     let mut conn = match TcpStream::connect(&addr) {
         Ok(c) => c,
@@ -2024,7 +2655,7 @@ fn webrpc_callback_tcp_loop(_handle: usize, port: u16, inbound_tx: mpsc::Sender<
         // 与 Go 示例代码分支一致：2 => 数据流，1 => 文件流（注释与实现以代码为准）
         match data_type {
             2 => handle_callback_data_stream(&mut conn, session_id, &inbound_tx),
-            1 => handle_callback_file_stream(&mut conn, session_id, &inbound_tx),
+            1 => handle_callback_file_stream(handle, &mut conn, session_id, &inbound_tx),
             _ => eprintln!("webrpc: 未知 data_type {data_type}"),
         }
     }
@@ -2070,6 +2701,7 @@ fn handle_callback_data_stream(
 
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 fn handle_callback_file_stream(
+    handle: usize,
     conn: &mut TcpStream,
     session_id: u32,
     inbound_tx: &mpsc::Sender<InboundUiEvent>,
@@ -2088,22 +2720,66 @@ fn handle_callback_file_stream(
         return;
     }
     let file_len = u32::from_be_bytes(len2) as usize;
-    let mut file_data = vec![0u8; file_len];
-    if read_full(conn, &mut file_data).is_err() {
-        return;
-    }
     let name_raw = String::from_utf8_lossy(&name_bytes);
     eprintln!("webrpc: 文件流 session={session_id} 文件名={name_raw} 大小={file_len}");
     let base = File2FileApp::ensure_app_root().join("received_files");
     let _ = fs::create_dir_all(&base);
-    let safe: String = name_raw
-        .chars()
-        .filter(|c| *c != '/' && *c != '\\' && *c != ':' && *c != '\0')
-        .collect();
+    let safe = normalize_transfer_file_name(&name_raw);
     if safe.is_empty() {
         return;
     }
+    let safe_for_signal = safe.clone();
     let path = base.join(&safe);
+    // 回调文件流可能被拆成多段到达；这里把“历史已落盘”作为累计基线。
+    let already_saved_bytes = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    let segment_bytes = file_len as u64;
+    let mut read_bytes: u64 = 0;
+    let started_at = Instant::now();
+    let mut last_report = started_at;
+    let mut file_data = Vec::with_capacity(file_len);
+    let mut chunk = vec![0u8; 64 * 1024];
+    while read_bytes < segment_bytes {
+        let need = ((segment_bytes - read_bytes) as usize).min(chunk.len());
+        if read_full(conn, &mut chunk[..need]).is_err() {
+            return;
+        }
+        file_data.extend_from_slice(&chunk[..need]);
+        read_bytes += need as u64;
+        let cumulative_received = already_saved_bytes + read_bytes;
+        let cumulative_total = already_saved_bytes + segment_bytes;
+        let now = Instant::now();
+        if now.duration_since(last_report) >= Duration::from_secs(3) {
+            let _ = inbound_tx.send(InboundUiEvent::PeerFileProgress {
+                session_id,
+                name: safe_for_signal.clone(),
+                size_bytes: cumulative_total,
+                received_bytes: cumulative_received,
+            });
+            let _ = webrpc_send_data(
+                handle,
+                session_id,
+                &build_file_transfer_signal_progress(
+                    &safe_for_signal,
+                    cumulative_total,
+                    cumulative_received,
+                ),
+            );
+            last_report = now;
+        }
+    }
+    let final_cumulative = already_saved_bytes + segment_bytes;
+    let _ = inbound_tx.send(InboundUiEvent::PeerFileProgress {
+        session_id,
+        name: safe_for_signal.clone(),
+        size_bytes: final_cumulative,
+        received_bytes: final_cumulative,
+    });
+    let _ = webrpc_send_data(
+        handle,
+        session_id,
+        &build_file_transfer_signal_progress(&safe_for_signal, final_cumulative, final_cumulative),
+    );
+    // 文件流可能按多段回调到达；仅在 START 清理一次，这里始终 append，避免后段覆盖前段。
     let write_result = fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -2123,6 +2799,7 @@ fn handle_callback_file_stream(
             size_bytes,
         });
     }
+
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]

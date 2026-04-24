@@ -1,5 +1,5 @@
 [package]
-name = "file2file-desktop-rust"
+name = "file2file"
 version = "0.1.0"
 edition = "2024"
 build = "build.rs"
