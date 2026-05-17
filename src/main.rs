@@ -6,22 +6,66 @@ use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use ab_glyph::{FontArc, PxScale};
 use chrono::Local;
 use eframe::egui;
+use image::{Rgba, RgbaImage};
 use image::ImageReader;
+use imageproc::drawing::{
+    draw_hollow_circle_mut, draw_hollow_rect_mut, draw_line_segment_mut, draw_text_mut,
+};
+use imageproc::rect::Rect;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use global_hotkey::GlobalHotKeyManager;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use screenshots::Screen;
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScreenshotTool {
+    Crop,
+    Rect,
+    Circle,
+    Arrow,
+    Text,
+}
+
+#[derive(Debug, Clone)]
+enum ScreenshotAction {
+    Rect { start: egui::Pos2, end: egui::Pos2 },
+    Circle { start: egui::Pos2, end: egui::Pos2 },
+    Arrow { start: egui::Pos2, end: egui::Pos2 },
+    Text { pos: egui::Pos2, text: String },
+}
+
+struct ScreenshotEditorState {
+    source_image: RgbaImage,
+    texture: Option<egui::TextureHandle>,
+    crop_rect: Option<(egui::Pos2, egui::Pos2)>,
+    actions: Vec<ScreenshotAction>,
+    tool: ScreenshotTool,
+    pending_drag_start: Option<egui::Pos2>,
+    pending_drag_now: Option<egui::Pos2>,
+    text_input: String,
+    selection_done: bool,
+}
 
 /// 登录页固定内容区宽度（像素）
 const EMBEDDED_LOGO_BYTES: &[u8] = include_bytes!("../assets/file2file_logo.png");
 const EMBEDDED_ICON_BYTES: &[u8] = include_bytes!("../assets/file2file_icon.ico");
 const TOPBAR_LOGO_SIZE: [f32; 2] = [170.0, 30.0];
 const APP_DATA_DIR_NAME: &str = "file2file_data";
+/// 会话聊天记录目录名（按「本地 Token / 对端 Token」定向存储，A→B 与 B→A 互不覆盖）。
+const CHAT_HISTORY_DIR: &str = "chat_history";
 const LOGIN_ALPHA: u8 = 179;
 const SESSION_ALPHA: u8 = 222;
 
@@ -236,14 +280,18 @@ enum FileTransferSignal {
     End { name: String, size_bytes: u64, ok: bool },
 }
 
-/// 与 webrpc `OpenSession` 对应的本地会话（内存态，退出登录后清空）。
+/// 与 webrpc `OpenSession` 对应的本地会话；`id == None` 表示仅本地历史、未连接 SDK。
 #[derive(Debug, Clone)]
 struct WebrpcChatSession {
-    /// `WebrpcClient_OpenSession` 返回的会话 ID
-    id: u32,
+    /// `WebrpcClient_OpenSession` 返回的会话 ID；未绑定 SDK 时为 `None`。
+    id: Option<u32>,
     peer_token: String,
     permission: String,
     messages: Vec<ChatMessage>,
+    /// UI 是否视为已连接（绿点、可发送）。对端先入站时仅绑定 SDK，需用户确认后才为 true。
+    ui_connected: bool,
+    /// 用户自定义备注（如对方姓名/公司），便于识别会话。
+    remark: String,
 }
 
 #[derive(Debug)]
@@ -267,11 +315,76 @@ enum InboundUiEvent {
         ok: bool,
         detail: String,
     },
+    /// SendFile 阻塞期间对端 PROGRESS 往往进不来；由发送线程每秒推送保守估算，供气泡刷新。
+    OutboundSendProgressTick {
+        session_id: u32,
+        local_id: u64,
+        transferred_estimate: u64,
+    },
+}
+
+/// 单个 Token 对应的本地登录缓存（按 token 区分，互不覆盖）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedLoginProfile {
+    token: String,
+    password: String,
+    permission: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct PersistedData {
+    #[serde(default)]
+    login_profiles: Vec<CachedLoginProfile>,
+    /// 最近一次成功登录的 token，用于登录页默认选中。
+    #[serde(default)]
+    last_login_token: Option<String>,
+    /// 旧版仅保存 token；加载时迁移到 `login_profiles` 后清空。
+    #[serde(default)]
     saved_token: Option<String>,
+}
+
+/// 磁盘上的单条聊天消息（不含运行时 `Instant` 等字段）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedChatMessage {
+    local_id: u64,
+    is_me: bool,
+    content: String,
+    timestamp: String,
+    kind: PersistedMessageKind,
+    file_name: Option<String>,
+    file_path: Option<String>,
+    file_size_bytes: Option<u64>,
+    transferred_bytes: Option<u64>,
+    send_speed_bps: Option<f64>,
+    recv_speed_bps: Option<f64>,
+    outbound: Option<PersistedOutboundState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum PersistedMessageKind {
+    Text,
+    File,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum PersistedOutboundState {
+    Sending,
+    Sent,
+    Failed { detail: String },
+}
+
+/// 一对 Token（本地登录方 + 对端）对应的完整会话记录。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedSessionHistory {
+    local_token: String,
+    peer_token: String,
+    permission: String,
+    #[serde(default)]
+    remark: String,
+    next_local_msg_id: u64,
+    messages: Vec<PersistedChatMessage>,
 }
 
 struct File2FileApp {
@@ -289,6 +402,8 @@ struct File2FileApp {
     show_login_password: bool,
     show_login_permission: bool,
     remember_token: bool,
+    /// 登录页「已保存账号」下拉当前选中下标（`login_profiles`）。
+    selected_cached_profile: Option<usize>,
     login_message: String,
     login_error: bool,
     style_initialized: bool,
@@ -310,6 +425,21 @@ struct File2FileApp {
     modal_error: String,
     open_session_busy: bool,
     open_session_rx: Option<mpsc::Receiver<Result<(u32, String, String), String>>>,
+    /// 异步 OpenSession 要升级/填入的 `chat_sessions` 下标（新建或重连）。
+    open_session_target_index: Option<usize>,
+    show_reconnect_confirm: bool,
+    reconnect_confirm_index: Option<usize>,
+    session_connect_error: Option<String>,
+    show_session_remark_modal: bool,
+    remark_edit_index: Option<usize>,
+    remark_edit_draft: String,
+    screenshot_rx: Option<mpsc::Receiver<Result<PathBuf, String>>>,
+    screenshot_in_progress: bool,
+    screenshot_editor: Option<ScreenshotEditorState>,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    screenshot_hotkey_manager: Option<GlobalHotKeyManager>,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    screenshot_hotkey_id: Option<u32>,
     inbound_file_start_marks: HashMap<String, Instant>,
     inbound_file_speed_cache: HashMap<String, f64>,
     /// 接收端「累计已接收字节」：按 `(session|name)` 记录实时累计值，避免被后续事件覆盖。
@@ -319,6 +449,7 @@ struct File2FileApp {
     outbound_file_msg_index: HashMap<String, u64>,
     next_local_msg_id: u64,
     ui_lang: UiLanguage,
+    last_sdk_session_sync: Option<Instant>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -333,7 +464,7 @@ impl File2FileApp {
         let state_file = app_root.join("state.json");
         let data = Self::load_or_create_data(&state_file).unwrap_or_default();
 
-        Self {
+        let mut app = Self {
             data,
             state_file,
             current_user: None,
@@ -346,6 +477,7 @@ impl File2FileApp {
             show_login_password: false,
             show_login_permission: false,
             remember_token: true,
+            selected_cached_profile: None,
             login_message: String::new(),
             login_error: false,
             style_initialized: false,
@@ -364,6 +496,20 @@ impl File2FileApp {
             modal_error: String::new(),
             open_session_busy: false,
             open_session_rx: None,
+            open_session_target_index: None,
+            show_reconnect_confirm: false,
+            reconnect_confirm_index: None,
+            session_connect_error: None,
+            show_session_remark_modal: false,
+            remark_edit_index: None,
+            remark_edit_draft: String::new(),
+            screenshot_rx: None,
+            screenshot_in_progress: false,
+            screenshot_editor: None,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            screenshot_hotkey_manager: None,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            screenshot_hotkey_id: None,
             inbound_file_start_marks: HashMap::new(),
             inbound_file_speed_cache: HashMap::new(),
             inbound_received_bytes: HashMap::new(),
@@ -371,13 +517,89 @@ impl File2FileApp {
             outbound_file_msg_index: HashMap::new(),
             next_local_msg_id: 1,
             ui_lang: UiLanguage::Zh,
-        }
+            last_sdk_session_sync: None,
+        };
+        app.init_screenshot_hotkey();
+        app
     }
 
     fn tr<'a>(&self, zh: &'a str, en: &'a str) -> &'a str {
         match self.ui_lang {
             UiLanguage::Zh => zh,
             UiLanguage::En => en,
+        }
+    }
+
+    /// 侧栏/标题区会话连接状态：绿点=已连接，灰点=未连接。
+    fn session_primary_label(remark: &str, peer_token: &str, fallback: &str) -> String {
+        let remark = remark.trim();
+        if !remark.is_empty() {
+            return remark.to_string();
+        }
+        let peer = peer_token.trim();
+        if !peer.is_empty() {
+            return peer.to_string();
+        }
+        fallback.to_string()
+    }
+
+    fn session_subtitle_token(remark: &str, peer_token: &str) -> Option<String> {
+        let remark = remark.trim();
+        let peer = peer_token.trim();
+        if !remark.is_empty() && !peer.is_empty() {
+            Some(peer.to_string())
+        } else {
+            None
+        }
+    }
+
+    fn open_session_remark_editor(&mut self, index: usize) {
+        let draft = self
+            .chat_sessions
+            .get(index)
+            .map(|s| s.remark.clone())
+            .unwrap_or_default();
+        self.remark_edit_index = Some(index);
+        self.remark_edit_draft = draft;
+        self.show_session_remark_modal = true;
+    }
+
+    fn save_session_remark(&mut self) {
+        let Some(index) = self.remark_edit_index else {
+            self.show_session_remark_modal = false;
+            return;
+        };
+        if index < self.chat_sessions.len() {
+            self.chat_sessions[index].remark = self.remark_edit_draft.trim().to_string();
+            self.persist_session_at_index(index);
+            self.status = self.tr("备注已保存", "Remark saved").to_string();
+        }
+        self.show_session_remark_modal = false;
+        self.remark_edit_index = None;
+    }
+
+    fn paint_session_connection_dot(ui: &egui::Ui, center: egui::Pos2, connected: bool) {
+        const RADIUS: f32 = 5.0;
+        let painter = ui.painter();
+        if connected {
+            painter.circle_filled(
+                center,
+                RADIUS + 2.5,
+                egui::Color32::from_rgba_unmultiplied(66, 210, 118, 50),
+            );
+            painter.circle_filled(center, RADIUS, egui::Color32::from_rgb(66, 210, 118));
+            painter.circle_stroke(
+                center,
+                RADIUS,
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(150, 255, 185)),
+            );
+        } else {
+            painter.circle_filled(center, RADIUS, egui::Color32::from_rgb(130, 138, 152));
+            painter.circle_stroke(
+                center,
+                RADIUS,
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(88, 96, 110)),
+            );
         }
     }
 
@@ -402,7 +624,10 @@ impl File2FileApp {
         session_id: u32,
         name: &str,
     ) -> Option<u64> {
-        let s = self.chat_sessions.iter().find(|s| s.id == session_id)?;
+        let s = self
+            .chat_sessions
+            .iter()
+            .find(|s| s.id == Some(session_id))?;
         for m in s.messages.iter().rev() {
             if m.is_me || !matches!(m.kind, MessageKind::File) {
                 continue;
@@ -514,7 +739,10 @@ impl File2FileApp {
         let local_id = local_id_opt
             .or_else(|| self.find_inbound_file_message_local_id_by_name(session_id, name));
         if let Some(local_id) = local_id {
-            if let Some(s) = self.chat_sessions.iter_mut().find(|s| s.id == session_id)
+            if let Some(s) = self
+                .chat_sessions
+                .iter_mut()
+                .find(|s| s.id == Some(session_id))
                 && let Some(msg) = s.messages.iter_mut().find(|m| m.local_id == local_id)
             {
                 msg.recv_speed_bps = speed_bps;
@@ -539,13 +767,42 @@ impl File2FileApp {
         let Some(local_id) = self.outbound_file_msg_index.get(&key).copied() else {
             return;
         };
-        if let Some(s) = self.chat_sessions.iter_mut().find(|s| s.id == session_id)
+        if let Some(s) = self
+            .chat_sessions
+            .iter_mut()
+            .find(|s| s.id == Some(session_id))
             && let Some(msg) = s.messages.iter_mut().find(|m| m.local_id == local_id)
             && let Some(started_at) = msg.send_started_at
         {
+            let cap = msg.file_size_bytes.unwrap_or(transferred_bytes);
+            let prev = msg.transferred_bytes.unwrap_or(0);
+            let merged = prev.max(transferred_bytes).min(cap);
             let elapsed_secs = started_at.elapsed().as_secs_f64().max(0.001);
-            msg.send_speed_bps = Some(transferred_bytes as f64 / elapsed_secs);
-            msg.transferred_bytes = Some(transferred_bytes);
+            msg.send_speed_bps = Some(merged as f64 / elapsed_secs);
+            msg.transferred_bytes = Some(merged);
+        }
+    }
+
+    fn apply_outbound_send_progress_tick(
+        &mut self,
+        session_id: u32,
+        local_id: u64,
+        transferred_estimate: u64,
+    ) {
+        if let Some(s) = self
+            .chat_sessions
+            .iter_mut()
+            .find(|s| s.id == Some(session_id))
+            && let Some(msg) = s.messages.iter_mut().find(|m| m.local_id == local_id)
+            && matches!(msg.outbound, Some(OutboundState::Sending))
+            && let Some(started_at) = msg.send_started_at
+        {
+            let cap = msg.file_size_bytes.unwrap_or(transferred_estimate);
+            let prev = msg.transferred_bytes.unwrap_or(0);
+            let merged = prev.max(transferred_estimate).min(cap);
+            let elapsed_secs = started_at.elapsed().as_secs_f64().max(0.001);
+            msg.transferred_bytes = Some(merged);
+            msg.send_speed_bps = Some(merged as f64 / elapsed_secs);
         }
     }
 
@@ -593,7 +850,16 @@ impl File2FileApp {
     }
 
     fn find_session_index_by_id(&self, sid: u32) -> Option<usize> {
-        self.chat_sessions.iter().position(|s| s.id == sid)
+        self.chat_sessions
+            .iter()
+            .position(|s| s.id == Some(sid))
+    }
+
+    fn find_session_index_by_peer(&self, peer_token: &str) -> Option<usize> {
+        let peer = peer_token.trim();
+        self.chat_sessions
+            .iter()
+            .position(|s| s.peer_token.trim() == peer)
     }
 
     fn peer_token_for_session_info(&self, sid: u32, fallback: &str) -> String {
@@ -606,24 +872,396 @@ impl File2FileApp {
         }
     }
 
-    fn ensure_session_for_inbound(&mut self, sid: u32) -> usize {
+    /// 将 SDK 入站会话绑定到已有离线历史（按对端 Token），避免对端重连时重复新建会话。
+    fn attach_inbound_sdk_session(&mut self, sid: u32) -> usize {
         if let Some(i) = self.find_session_index_by_id(sid) {
             return i;
         }
         let peer_token = self.peer_token_for_session_info(sid, "");
+        let peer_trim = peer_token.trim().to_string();
+        if !peer_trim.is_empty() {
+            if let Some(i) = self.find_session_index_by_peer(&peer_trim) {
+                let refill_history = self.chat_sessions[i].messages.is_empty()
+                    || self.chat_sessions[i].permission.is_empty()
+                    || self.chat_sessions[i].remark.is_empty();
+                let history_bundle = if refill_history {
+                    Some(self.load_session_history_bundle(&peer_trim))
+                } else {
+                    None
+                };
+                let session = &mut self.chat_sessions[i];
+                if session.id.is_none() || session.id == Some(sid) {
+                    session.id = Some(sid);
+                    // 对端主动连入：复用历史会话，UI 保持未连接，待用户确认。
+                    if session.peer_token.trim().is_empty() {
+                        session.peer_token = peer_token.clone();
+                    }
+                    if let Some((messages, permission, remark)) = history_bundle {
+                        if session.messages.is_empty() && !messages.is_empty() {
+                            session.messages = messages;
+                        }
+                        if session.permission.is_empty() && !permission.is_empty() {
+                            session.permission = permission;
+                        }
+                        if session.remark.is_empty() && !remark.is_empty() {
+                            session.remark = remark;
+                        }
+                    }
+                    self.persist_session_at_index(i);
+                    return i;
+                }
+            }
+        }
+        let (messages, permission, remark) = if peer_trim.is_empty() {
+            (Vec::new(), String::new(), String::new())
+        } else {
+            self.load_session_history_bundle(&peer_trim)
+        };
+        let new_index = self.chat_sessions.len();
         self.chat_sessions.push(WebrpcChatSession {
-            id: sid,
-            peer_token,
-            permission: String::new(),
-            messages: Vec::new(),
+            id: Some(sid),
+            peer_token: peer_token.clone(),
+            permission,
+            messages,
+            ui_connected: false,
+            remark,
         });
-        self.chat_sessions.len().saturating_sub(1)
+        if !peer_trim.is_empty() {
+            self.persist_session_at_index(new_index);
+        }
+        self.dedupe_sessions_by_peer();
+        new_index
+    }
+
+    fn ensure_session_for_inbound(&mut self, sid: u32) -> usize {
+        self.attach_inbound_sdk_session(sid)
+    }
+
+    /// 合并同一对端 Token 的重复会话项（保留有 SDK id 或消息更多的条目）。
+    fn dedupe_sessions_by_peer(&mut self) {
+        let mut keep_index_by_peer: HashMap<String, usize> = HashMap::new();
+        let mut i = 0usize;
+        while i < self.chat_sessions.len() {
+            let peer = self.chat_sessions[i].peer_token.trim().to_string();
+            if peer.is_empty() {
+                i += 1;
+                continue;
+            }
+            if let Some(&keep_i) = keep_index_by_peer.get(&peer) {
+                let dup = self.chat_sessions.remove(i);
+                let keep = &mut self.chat_sessions[keep_i];
+                if keep.id.is_none() {
+                    keep.id = dup.id;
+                }
+                keep.ui_connected = keep.ui_connected || dup.ui_connected;
+                if dup.messages.len() > keep.messages.len() {
+                    keep.messages = dup.messages;
+                }
+                if keep.permission.is_empty() {
+                    keep.permission = dup.permission;
+                }
+                if keep.remark.is_empty() {
+                    keep.remark = dup.remark;
+                }
+                continue;
+            }
+            keep_index_by_peer.insert(peer, i);
+            i += 1;
+        }
+    }
+
+    /// 对端主动 OpenSession 时，周期性把 SDK 会话挂到本地历史会话上（无需等首条消息）。
+    fn sync_passive_sdk_sessions(&mut self) {
+        let Some(handle) = self.client_handle else {
+            return;
+        };
+        if webrpc_session_size(handle) == 0 {
+            return;
+        }
+        for sid in 1..=2048u32 {
+            if self.find_session_index_by_id(sid).is_some() {
+                continue;
+            }
+            let peer = match webrpc_tar_token_by_session(handle, sid) {
+                Ok(token) if !token.trim().is_empty() => token,
+                _ => continue,
+            };
+            if self.find_session_index_by_peer(&peer).is_some() {
+                self.attach_inbound_sdk_session(sid);
+            }
+        }
+        self.dedupe_sessions_by_peer();
+    }
+
+    fn maybe_sync_passive_sdk_sessions(&mut self) {
+        let due = self
+            .last_sdk_session_sync
+            .map(|t| t.elapsed() >= Duration::from_millis(400))
+            .unwrap_or(true);
+        if !due {
+            return;
+        }
+        self.last_sdk_session_sync = Some(Instant::now());
+        self.sync_passive_sdk_sessions();
+    }
+
+    fn list_saved_sessions_for_local(local_token: &str) -> Vec<PersistedSessionHistory> {
+        let local = local_token.trim();
+        if local.is_empty() {
+            return Vec::new();
+        }
+        let dir = Self::ensure_app_root()
+            .join(CHAT_HISTORY_DIR)
+            .join(Self::sanitize_token_for_path(local));
+        let Ok(entries) = fs::read_dir(&dir) else {
+            return Vec::new();
+        };
+        let mut histories = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(raw) = fs::read_to_string(&path) else {
+                continue;
+            };
+            if let Ok(history) = serde_json::from_str::<PersistedSessionHistory>(&raw) {
+                if !history.peer_token.trim().is_empty() {
+                    histories.push(history);
+                }
+            }
+        }
+        histories.sort_by(|a, b| {
+            let last_ts = |h: &PersistedSessionHistory| {
+                h.messages
+                    .last()
+                    .map(|m| m.timestamp.clone())
+                    .unwrap_or_default()
+            };
+            last_ts(b).cmp(&last_ts(a))
+        });
+        histories
+    }
+
+    fn restore_offline_sessions_after_login(&mut self) {
+        let Some(local) = self.current_user.clone() else {
+            return;
+        };
+        for history in Self::list_saved_sessions_for_local(&local) {
+            let peer = history.peer_token.trim();
+            if peer.is_empty() || self.find_session_index_by_peer(peer).is_some() {
+                continue;
+            }
+            let messages: Vec<ChatMessage> = history
+                .messages
+                .into_iter()
+                .map(Self::chat_message_from_persisted)
+                .collect();
+            self.bump_next_local_msg_id_from_messages(&messages);
+            self.next_local_msg_id = self.next_local_msg_id.max(history.next_local_msg_id);
+            self.chat_sessions.push(WebrpcChatSession {
+                id: None,
+                peer_token: history.peer_token,
+                permission: history.permission,
+                messages,
+                ui_connected: false,
+                remark: history.remark,
+            });
+        }
+        self.dedupe_sessions_by_peer();
     }
 
     fn ensure_app_root() -> PathBuf {
         let app_root = user_workspace_dir().join(APP_DATA_DIR_NAME);
         let _ = fs::create_dir_all(&app_root);
         app_root
+    }
+
+    fn sanitize_token_for_path(token: &str) -> String {
+        token
+            .chars()
+            .map(|c| match c {
+                '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0' => '_',
+                c if c.is_whitespace() => '_',
+                c => c,
+            })
+            .collect()
+    }
+
+    /// `chat_history/{local_token}/{local}__{peer}.json`，以双方 Token 为唯一键（含方向）。
+    fn session_history_path(local_token: &str, peer_token: &str) -> PathBuf {
+        let local = local_token.trim();
+        let peer = peer_token.trim();
+        let dir = Self::ensure_app_root()
+            .join(CHAT_HISTORY_DIR)
+            .join(Self::sanitize_token_for_path(local));
+        let _ = fs::create_dir_all(&dir);
+        let file_name = format!(
+            "{}__{}.json",
+            Self::sanitize_token_for_path(local),
+            Self::sanitize_token_for_path(peer)
+        );
+        dir.join(file_name)
+    }
+
+    fn chat_message_to_persisted(msg: &ChatMessage) -> PersistedChatMessage {
+        let kind = match msg.kind {
+            MessageKind::Text => PersistedMessageKind::Text,
+            MessageKind::File => PersistedMessageKind::File,
+        };
+        let outbound = msg.outbound.as_ref().map(|o| match o {
+            OutboundState::Sending => PersistedOutboundState::Sending,
+            OutboundState::Sent => PersistedOutboundState::Sent,
+            OutboundState::Failed(d) => PersistedOutboundState::Failed { detail: d.clone() },
+        });
+        PersistedChatMessage {
+            local_id: msg.local_id,
+            is_me: msg.is_me,
+            content: msg.content.clone(),
+            timestamp: msg.timestamp.clone(),
+            kind,
+            file_name: msg.file_name.clone(),
+            file_path: msg.file_path.clone(),
+            file_size_bytes: msg.file_size_bytes,
+            transferred_bytes: msg.transferred_bytes,
+            send_speed_bps: msg.send_speed_bps,
+            recv_speed_bps: msg.recv_speed_bps,
+            outbound,
+        }
+    }
+
+    fn chat_message_from_persisted(msg: PersistedChatMessage) -> ChatMessage {
+        let kind = match msg.kind {
+            PersistedMessageKind::Text => MessageKind::Text,
+            PersistedMessageKind::File => MessageKind::File,
+        };
+        let outbound = msg.outbound.map(|o| match o {
+            PersistedOutboundState::Sending => OutboundState::Sent,
+            PersistedOutboundState::Sent => OutboundState::Sent,
+            PersistedOutboundState::Failed { detail } => OutboundState::Failed(detail),
+        });
+        ChatMessage {
+            local_id: msg.local_id,
+            is_me: msg.is_me,
+            content: msg.content,
+            timestamp: msg.timestamp,
+            kind,
+            file_name: msg.file_name,
+            file_path: msg.file_path,
+            file_size_bytes: msg.file_size_bytes,
+            transferred_bytes: msg.transferred_bytes,
+            send_started_at: None,
+            send_speed_bps: msg.send_speed_bps,
+            recv_speed_bps: msg.recv_speed_bps,
+            outbound,
+        }
+    }
+
+    fn bump_next_local_msg_id_from_messages(&mut self, messages: &[ChatMessage]) {
+        if let Some(max_id) = messages.iter().map(|m| m.local_id).max() {
+            self.next_local_msg_id = self.next_local_msg_id.max(max_id.saturating_add(1));
+        }
+    }
+
+    fn load_session_history(
+        local_token: &str,
+        peer_token: &str,
+    ) -> Option<PersistedSessionHistory> {
+        let local = local_token.trim();
+        let peer = peer_token.trim();
+        if local.is_empty() || peer.is_empty() {
+            return None;
+        }
+        let path = Self::session_history_path(local, peer);
+        let raw = fs::read_to_string(&path).ok()?;
+        serde_json::from_str(&raw).ok()
+    }
+
+    fn load_session_history_bundle(
+        &mut self,
+        peer_token: &str,
+    ) -> (Vec<ChatMessage>, String, String) {
+        let Some(local) = self.current_user.as_deref() else {
+            return (Vec::new(), String::new(), String::new());
+        };
+        let Some(history) = Self::load_session_history(local, peer_token) else {
+            return (Vec::new(), String::new(), String::new());
+        };
+        if history.local_token.trim() != local.trim() || history.peer_token.trim() != peer_token.trim()
+        {
+            return (Vec::new(), String::new(), String::new());
+        }
+        let messages: Vec<ChatMessage> = history
+            .messages
+            .into_iter()
+            .map(Self::chat_message_from_persisted)
+            .collect();
+        self.bump_next_local_msg_id_from_messages(&messages);
+        self.next_local_msg_id = self.next_local_msg_id.max(history.next_local_msg_id);
+        (messages, history.permission, history.remark)
+    }
+
+    fn save_session_history(
+        local_token: &str,
+        peer_token: &str,
+        permission: &str,
+        remark: &str,
+        messages: &[ChatMessage],
+        next_local_msg_id: u64,
+    ) -> Result<()> {
+        let local = local_token.trim();
+        let peer = peer_token.trim();
+        if local.is_empty() || peer.is_empty() {
+            return Ok(());
+        }
+        let payload = PersistedSessionHistory {
+            local_token: local.to_string(),
+            peer_token: peer.to_string(),
+            permission: permission.to_string(),
+            remark: remark.to_string(),
+            next_local_msg_id,
+            messages: messages.iter().map(Self::chat_message_to_persisted).collect(),
+        };
+        let path = Self::session_history_path(local, peer);
+        let text = serde_json::to_string_pretty(&payload)?;
+        let tmp = path.with_extension("json.tmp");
+        fs::write(&tmp, text)?;
+        fs::rename(tmp, path)?;
+        Ok(())
+    }
+
+    fn persist_session_at_index(&mut self, index: usize) {
+        let Some(local) = self.current_user.as_deref().map(str::trim).filter(|s| !s.is_empty())
+        else {
+            return;
+        };
+        let Some(session) = self.chat_sessions.get(index) else {
+            return;
+        };
+        let peer = session.peer_token.trim();
+        if peer.is_empty() {
+            return;
+        };
+        let permission = session.permission.clone();
+        let remark = session.remark.clone();
+        let messages = session.messages.clone();
+        let next_id = self.next_local_msg_id;
+        if let Err(err) = Self::save_session_history(
+            local, peer, &permission, &remark, &messages, next_id,
+        )
+        {
+            self.status = format!(
+                "{}: {err}",
+                self.tr("会话记录保存失败", "Failed to save session history")
+            );
+        }
+    }
+
+    fn persist_all_sessions(&mut self) {
+        let count = self.chat_sessions.len();
+        for i in 0..count {
+            self.persist_session_at_index(i);
+        }
     }
 
     fn load_or_create_data(path: &Path) -> Result<PersistedData> {
@@ -635,9 +1273,100 @@ impl File2FileApp {
         }
 
         let raw = fs::read_to_string(path).with_context(|| format!("读取状态文件失败: {path:?}"))?;
-        let parsed = serde_json::from_str::<PersistedData>(&raw)
+        let mut parsed = serde_json::from_str::<PersistedData>(&raw)
             .with_context(|| format!("解析状态文件失败: {path:?}"))?;
+        Self::migrate_legacy_persisted(&mut parsed);
         Ok(parsed)
+    }
+
+    fn migrate_legacy_persisted(data: &mut PersistedData) {
+        if let Some(token) = data.saved_token.take() {
+            let token = token.trim().to_string();
+            if !token.is_empty()
+                && !data
+                    .login_profiles
+                    .iter()
+                    .any(|p| p.token == token)
+            {
+                data.login_profiles.push(CachedLoginProfile {
+                    token,
+                    password: String::new(),
+                    permission: String::new(),
+                });
+            }
+        }
+    }
+
+    fn upsert_login_profile(&mut self, token: &str, password: &str, permission: &str) {
+        let token = token.trim().to_string();
+        if token.is_empty() {
+            return;
+        }
+        if let Some(existing) = self
+            .data
+            .login_profiles
+            .iter_mut()
+            .find(|p| p.token == token)
+        {
+            existing.password = password.to_string();
+            existing.permission = permission.to_string();
+        } else {
+            self.data.login_profiles.push(CachedLoginProfile {
+                token: token.clone(),
+                password: password.to_string(),
+                permission: permission.to_string(),
+            });
+        }
+        if let Some(pos) = self.data.login_profiles.iter().position(|p| p.token == token) {
+            let profile = self.data.login_profiles.remove(pos);
+            self.data.login_profiles.insert(0, profile);
+            self.selected_cached_profile = Some(0);
+        }
+        self.data.last_login_token = Some(token);
+    }
+
+    fn apply_cached_profile(&mut self, index: usize) {
+        let Some(profile) = self.data.login_profiles.get(index).cloned() else {
+            return;
+        };
+        self.login_token = profile.token;
+        self.login_password = profile.password;
+        self.login_permission = profile.permission;
+        self.selected_cached_profile = Some(index);
+    }
+
+    fn sync_selected_profile_by_token(&mut self) {
+        let token = self.login_token.trim();
+        if token.is_empty() {
+            self.selected_cached_profile = None;
+            return;
+        }
+        self.selected_cached_profile = self
+            .data
+            .login_profiles
+            .iter()
+            .position(|p| p.token == token);
+    }
+
+    fn refill_login_from_cache(&mut self) {
+        Self::migrate_legacy_persisted(&mut self.data);
+        if let Some(token) = self.data.last_login_token.clone() {
+            if let Some(idx) = self.data.login_profiles.iter().position(|p| p.token == token) {
+                self.apply_cached_profile(idx);
+                return;
+            }
+        }
+        if self.login_token.trim().is_empty() {
+            if self.data.login_profiles.is_empty() {
+                return;
+            }
+            self.apply_cached_profile(0);
+            return;
+        }
+        self.sync_selected_profile_by_token();
+        if let Some(idx) = self.selected_cached_profile {
+            self.apply_cached_profile(idx);
+        }
     }
 
     fn save_data(&mut self) {
@@ -655,8 +1384,9 @@ impl File2FileApp {
     }
 
     fn init_login_defaults(&mut self) {
-        if self.login_token.is_empty() && let Some(token) = &self.data.saved_token {
-            self.login_token = token.clone();
+        Self::migrate_legacy_persisted(&mut self.data);
+        if self.login_token.is_empty() && self.login_password.is_empty() {
+            self.refill_login_from_cache();
         }
     }
 
@@ -675,13 +1405,6 @@ impl File2FileApp {
             self.login_error = true;
             return;
         }
-
-        if self.remember_token {
-            self.data.saved_token = Some(token.clone());
-        } else {
-            self.data.saved_token = None;
-        }
-        self.save_data();
 
         self.is_logging_in = true;
         self.login_error = false;
@@ -705,8 +1428,19 @@ impl File2FileApp {
             Ok(Ok((handle, port))) => {
                 self.is_logging_in = false;
                 self.client_handle = Some(handle);
-                self.current_user = Some(self.login_token.trim().to_string());
-                self.active_login_permission = self.login_permission.trim().to_string();
+                let logged_token = self.login_token.trim().to_string();
+                let logged_password = self.login_password.trim().to_string();
+                let logged_permission = self.login_permission.trim().to_string();
+                self.current_user = Some(logged_token.clone());
+                self.active_login_permission = logged_permission.clone();
+                if self.remember_token {
+                    self.upsert_login_profile(
+                        &logged_token,
+                        &logged_password,
+                        &logged_permission,
+                    );
+                    self.save_data();
+                }
                 self.login_password.clear();
                 self.login_permission.clear();
                 self.show_login_password = false;
@@ -722,6 +1456,16 @@ impl File2FileApp {
                 );
                 self.chat_sessions.clear();
                 self.selected_session = None;
+                self.open_session_target_index = None;
+                self.show_reconnect_confirm = false;
+                self.reconnect_confirm_index = None;
+                self.session_connect_error = None;
+                self.restore_offline_sessions_after_login();
+                if self.selected_session.is_none() && !self.chat_sessions.is_empty() {
+                    self.selected_session = Some(0);
+                }
+                self.last_sdk_session_sync = None;
+                self.sync_passive_sdk_sessions();
                 self.composer_input.clear();
                 self.pending_file_path = None;
                 self.inbound_file_start_marks.clear();
@@ -729,7 +1473,6 @@ impl File2FileApp {
                 self.inbound_active_file_row.clear();
                 self.outbound_file_msg_index.clear();
                 self.show_new_session_modal = false;
-                self.save_data();
                 let (tx_in, rx_in) = mpsc::channel();
                 self.inbound_rx = Some(rx_in);
                 self.inbound_tx = Some(tx_in.clone());
@@ -938,8 +1681,67 @@ impl File2FileApp {
                                             let perm_hint = self
                                                 .tr("请输入口令（可留空）", "Please enter permission (optional)")
                                                 .to_string();
-                                            let remember_token_label =
-                                                self.tr("记住 Token", "Remember Token").to_string();
+                                            let remember_token_label = self
+                                                .tr("保存登录信息", "Save login info")
+                                                .to_string();
+
+                                            if self.data.login_profiles.len() > 1 {
+                                                let account_label = self
+                                                    .tr("已保存账号", "Saved accounts")
+                                                    .to_string();
+                                                ui.horizontal(|ui| {
+                                                    ui.add_sized(
+                                                        [label_width, 36.0],
+                                                        egui::Label::new(
+                                                            egui::RichText::new(&account_label)
+                                                                .strong()
+                                                                .color(egui::Color32::from_rgb(
+                                                                    194, 231, 247,
+                                                                )),
+                                                        ),
+                                                    );
+                                                    let combo_w = ui.available_width().max(80.0);
+                                                    let mut selected = self
+                                                        .selected_cached_profile
+                                                        .unwrap_or(0)
+                                                        .min(
+                                                            self.data
+                                                                .login_profiles
+                                                                .len()
+                                                                .saturating_sub(1),
+                                                        );
+                                                    let selected_text = self
+                                                        .data
+                                                        .login_profiles
+                                                        .get(selected)
+                                                        .map(|p| p.token.as_str())
+                                                        .unwrap_or("");
+                                                    egui::ComboBox::from_id_salt(
+                                                        "cached_login_profile",
+                                                    )
+                                                    .width(combo_w)
+                                                    .selected_text(selected_text)
+                                                    .show_ui(ui, |ui| {
+                                                        for (i, profile) in self
+                                                            .data
+                                                            .login_profiles
+                                                            .iter()
+                                                            .enumerate()
+                                                        {
+                                                            ui.selectable_value(
+                                                                &mut selected,
+                                                                i,
+                                                                &profile.token,
+                                                            );
+                                                        }
+                                                    });
+                                                    if self.selected_cached_profile != Some(selected)
+                                                    {
+                                                        self.apply_cached_profile(selected);
+                                                    }
+                                                });
+                                                ui.add_space(8.0);
+                                            }
 
                                             ui.horizontal(|ui| {
                                                 ui.add_sized(
@@ -951,11 +1753,24 @@ impl File2FileApp {
                                                     ),
                                                 );
                                                 let token_w = ui.available_width().max(80.0);
-                                                ui.add_sized(
+                                                let token_response = ui.add_sized(
                                                     [token_w, 36.0],
                                                     egui::TextEdit::singleline(&mut self.login_token)
                                                         .hint_text(token_hint.clone()),
                                                 );
+                                                if token_response.changed() {
+                                                    let token = self.login_token.trim().to_string();
+                                                    if let Some(idx) = self
+                                                        .data
+                                                        .login_profiles
+                                                        .iter()
+                                                        .position(|p| p.token == token)
+                                                    {
+                                                        self.apply_cached_profile(idx);
+                                                    } else {
+                                                        self.selected_cached_profile = None;
+                                                    }
+                                                }
                                             });
 
                                             ui.add_space(8.0);
@@ -1132,15 +1947,6 @@ impl File2FileApp {
     }
 
     fn begin_open_session(&mut self) {
-        if self.open_session_busy || self.open_session_rx.is_some() {
-            return;
-        }
-        let Some(handle) = self.client_handle else {
-            self.modal_error = self
-                .tr("未连接 webrpc", "Not connected to webrpc")
-                .to_string();
-            return;
-        };
         let peer = self.modal_peer_token.trim().to_string();
         if peer.is_empty() {
             self.modal_error = self
@@ -1148,20 +1954,83 @@ impl File2FileApp {
                 .to_string();
             return;
         }
+        let permission = self.modal_permission.trim().to_string();
+        let target = self.find_session_index_by_peer(&peer);
+        self.modal_error.clear();
+        self.session_connect_error = None;
+        self.begin_connect_peer(peer, permission, target);
+    }
+
+    fn begin_reconnect_session(&mut self, index: usize) {
+        let (ui_connected, has_sdk, peer, permission) = {
+            let Some(session) = self.chat_sessions.get(index) else {
+                return;
+            };
+            (
+                session.ui_connected,
+                session.id.is_some(),
+                session.peer_token.trim().to_string(),
+                session.permission.clone(),
+            )
+        };
+        if ui_connected {
+            self.selected_session = Some(index);
+            return;
+        }
+        if has_sdk {
+            self.chat_sessions[index].ui_connected = true;
+            self.selected_session = Some(index);
+            self.session_connect_error = None;
+            self.status = format!(
+                "{} → {}",
+                self.tr("已接受对端连接", "Accepted peer connection"),
+                peer
+            );
+            self.persist_session_at_index(index);
+            return;
+        }
+        if peer.is_empty() {
+            return;
+        }
+        self.session_connect_error = None;
+        self.begin_connect_peer(peer, permission, Some(index));
+    }
+
+    fn begin_connect_peer(
+        &mut self,
+        peer: String,
+        permission: String,
+        target_index: Option<usize>,
+    ) {
+        if self.open_session_busy || self.open_session_rx.is_some() {
+            return;
+        }
+        let Some(handle) = self.client_handle else {
+            let err = self
+                .tr("未连接 webrpc", "Not connected to webrpc")
+                .to_string();
+            self.modal_error = err.clone();
+            self.session_connect_error = Some(err);
+            return;
+        };
         if let Some(current) = self.current_user.as_ref()
-            && peer == current.trim()
+            && peer.trim() == current.trim()
         {
-            self.modal_error = self
+            let err = self
                 .tr(
                     "目标 Token 不能是当前登录 Token",
                     "Peer Token cannot be the current login Token",
                 )
                 .to_string();
+            self.modal_error = err.clone();
+            self.session_connect_error = Some(err);
             return;
         }
-        let permission = self.modal_permission.trim().to_string();
-        self.modal_error.clear();
+        self.open_session_target_index = target_index;
         self.open_session_busy = true;
+        self.status = self
+            .tr("正在连接会话…", "Connecting session...")
+            .to_string();
         let (tx, rx) = mpsc::channel();
         self.open_session_rx = Some(rx);
         thread::spawn(move || {
@@ -1177,45 +2046,101 @@ impl File2FileApp {
         match rx.try_recv() {
             Ok(Ok((sid, peer, perm))) => {
                 self.open_session_busy = false;
-                let welcome = ChatMessage {
-                    local_id: self.alloc_local_msg_id(),
-                    is_me: false,
-                    content: format!(
-                        "{}: {sid}",
-                        self.tr("会话已建立，会话 ID", "Session established, session ID")
-                    ),
-                    timestamp: now_str(),
-                    kind: MessageKind::Text,
-                    file_name: None,
-                    file_path: None,
-                    file_size_bytes: None,
-                    transferred_bytes: None,
-                    send_started_at: None,
-                    send_speed_bps: None,
-                    recv_speed_bps: None,
-                    outbound: None,
-                };
-                if let Some(i) = self.find_session_index_by_id(sid) {
-                    self.chat_sessions[i].peer_token = peer.clone();
-                    self.chat_sessions[i].permission = perm;
-                    self.chat_sessions[i].messages.push(welcome);
-                    self.selected_session = Some(i);
+                let (mut messages, cached_perm, cached_remark) =
+                    self.load_session_history_bundle(&peer);
+                let session_permission = if perm.is_empty() {
+                    cached_perm
                 } else {
-                    self.chat_sessions.push(WebrpcChatSession {
-                        id: sid,
-                        peer_token: peer.clone(),
-                        permission: perm,
-                        messages: vec![welcome],
+                    perm
+                };
+                if messages.is_empty() {
+                    messages.push(ChatMessage {
+                        local_id: self.alloc_local_msg_id(),
+                        is_me: false,
+                        content: format!(
+                            "{}: {sid}",
+                            self.tr("会话已建立，会话 ID", "Session established, session ID")
+                        ),
+                        timestamp: now_str(),
+                        kind: MessageKind::Text,
+                        file_name: None,
+                        file_path: None,
+                        file_size_bytes: None,
+                        transferred_bytes: None,
+                        send_started_at: None,
+                        send_speed_bps: None,
+                        recv_speed_bps: None,
+                        outbound: None,
                     });
-                    self.selected_session = Some(self.chat_sessions.len().saturating_sub(1));
                 }
+                let stored_perm = session_permission;
+                let target = self.open_session_target_index.take();
+                let index = if let Some(i) = target {
+                    if i < self.chat_sessions.len() {
+                        self.chat_sessions[i].id = Some(sid);
+                        self.chat_sessions[i].ui_connected = true;
+                        self.chat_sessions[i].peer_token = peer.clone();
+                        self.chat_sessions[i].permission = stored_perm.clone();
+                        if self.chat_sessions[i].remark.is_empty() && !cached_remark.is_empty() {
+                            self.chat_sessions[i].remark = cached_remark.clone();
+                        }
+                        if self.chat_sessions[i].messages.is_empty() {
+                            self.chat_sessions[i].messages = messages;
+                        }
+                        Some(i)
+                    } else {
+                        None
+                    }
+                } else if let Some(i) = self.find_session_index_by_peer(&peer) {
+                    self.chat_sessions[i].id = Some(sid);
+                    self.chat_sessions[i].ui_connected = true;
+                    self.chat_sessions[i].peer_token = peer.clone();
+                    self.chat_sessions[i].permission = stored_perm.clone();
+                    if self.chat_sessions[i].remark.is_empty() && !cached_remark.is_empty() {
+                        self.chat_sessions[i].remark = cached_remark.clone();
+                    }
+                    if self.chat_sessions[i].messages.is_empty() {
+                        self.chat_sessions[i].messages = messages;
+                    }
+                    Some(i)
+                } else if let Some(i) = self.find_session_index_by_id(sid) {
+                    self.chat_sessions[i].ui_connected = true;
+                    self.chat_sessions[i].peer_token = peer.clone();
+                    self.chat_sessions[i].permission = stored_perm.clone();
+                    if self.chat_sessions[i].remark.is_empty() && !cached_remark.is_empty() {
+                        self.chat_sessions[i].remark = cached_remark.clone();
+                    }
+                    if self.chat_sessions[i].messages.is_empty() {
+                        self.chat_sessions[i].messages = messages;
+                    }
+                    Some(i)
+                } else {
+                    let new_index = self.chat_sessions.len();
+                    self.chat_sessions.push(WebrpcChatSession {
+                        id: Some(sid),
+                        peer_token: peer.clone(),
+                        permission: stored_perm,
+                        messages,
+                        ui_connected: true,
+                        remark: cached_remark,
+                    });
+                    Some(new_index)
+                };
+                if let Some(i) = index {
+                    self.selected_session = Some(i);
+                    self.persist_session_at_index(i);
+                }
+                self.dedupe_sessions_by_peer();
                 self.show_new_session_modal = false;
+                self.show_reconnect_confirm = false;
+                self.reconnect_confirm_index = None;
                 self.modal_peer_token.clear();
                 self.modal_permission.clear();
                 self.modal_error.clear();
+                self.session_connect_error = None;
                 self.status = format!(
                     "{} {} → {}",
-                    self.tr("已打开会话", "Opened session"),
+                    self.tr("已连接会话", "Session connected"),
                     sid,
                     peer
                 );
@@ -1223,7 +2148,14 @@ impl File2FileApp {
             }
             Ok(Err(e)) => {
                 self.open_session_busy = false;
-                self.modal_error = e;
+                self.open_session_target_index = None;
+                self.modal_error = e.clone();
+                self.session_connect_error = Some(e);
+                self.status = format!(
+                    "{}: {}",
+                    self.tr("连接失败", "Connection failed"),
+                    self.session_connect_error.as_deref().unwrap_or("")
+                );
                 ctx.request_repaint();
             }
             Err(mpsc::TryRecvError::Empty) => {
@@ -1240,11 +2172,198 @@ impl File2FileApp {
         }
     }
 
+    fn init_screenshot_hotkey(&mut self) {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            if let Ok(manager) = GlobalHotKeyManager::new() {
+                let hotkey = HotKey::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyA);
+                if manager.register(hotkey).is_ok() {
+                    self.screenshot_hotkey_id = Some(hotkey.id());
+                    self.screenshot_hotkey_manager = Some(manager);
+                }
+            }
+        }
+    }
+
+    fn poll_screenshot_hotkey(&mut self, ctx: &egui::Context) {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            if self.screenshot_hotkey_id.is_none() || self.current_user.is_none() {
+                return;
+            }
+            let hotkey_id = self.screenshot_hotkey_id;
+            while let Ok(event) = global_hotkey::GlobalHotKeyEvent::receiver().try_recv() {
+                if Some(event.id) == hotkey_id && !self.screenshot_in_progress {
+                    self.begin_desktop_capture(ctx);
+                }
+            }
+        }
+    }
+
+    fn begin_desktop_capture(&mut self, ctx: &egui::Context) {
+        if self.screenshot_in_progress {
+            return;
+        }
+        self.screenshot_in_progress = true;
+        self.status = self.tr("正在截图…", "Capturing screenshot...").to_string();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        let (tx, rx) = mpsc::channel();
+        self.screenshot_rx = Some(rx);
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(250));
+            let _ = tx.send(capture_desktop_screenshot_file());
+        });
+    }
+
+    fn poll_screenshot_worker(&mut self, ctx: &egui::Context) {
+        let Some(rx) = self.screenshot_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(path)) => {
+                self.screenshot_in_progress = false;
+                match load_screenshot_editor_state(&path) {
+                    Ok(editor) => {
+                        self.screenshot_editor = Some(editor);
+                        self.status = self
+                            .tr("截图完成，请编辑后确认", "Screenshot captured. Edit and confirm.")
+                            .to_string();
+                    }
+                    Err(e) => {
+                        self.status = format!("{}: {e}", self.tr("截图失败", "Screenshot failed"));
+                    }
+                }
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                ctx.request_repaint();
+            }
+            Ok(Err(e)) => {
+                self.screenshot_in_progress = false;
+                self.status = format!("{}: {e}", self.tr("截图失败", "Screenshot failed"));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                ctx.request_repaint();
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.screenshot_rx = Some(rx);
+                ctx.request_repaint_after(Duration::from_millis(120));
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.screenshot_in_progress = false;
+                self.status = self
+                    .tr("截图线程异常退出", "Screenshot worker exited unexpectedly")
+                    .to_string();
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                ctx.request_repaint();
+            }
+        }
+    }
+
+    fn draw_screenshot_editor(&mut self, ctx: &egui::Context) {
+        let title = self.tr("截图编辑", "Screenshot Editor").to_string();
+        let crop_label = self.tr("裁剪", "Crop").to_string();
+        let rect_label = self.tr("矩形", "Rect").to_string();
+        let circle_label = self.tr("圆圈", "Circle").to_string();
+        let arrow_label = self.tr("箭头", "Arrow").to_string();
+        let text_label = self.tr("文字", "Text").to_string();
+        let undo_label = self.tr("撤销", "Undo").to_string();
+        let cancel_label = self.tr("取消", "Cancel").to_string();
+        let confirm_label = self.tr("确认并附加", "Confirm Attach").to_string();
+        let text_input_label = self.tr("文字:", "Text:").to_string();
+        let select_hint = self
+            .tr(
+                "请在图片上按住鼠标左键拖拽选区，松开后进入标注",
+                "Press and drag left mouse to select area, release to annotate",
+            )
+            .to_string();
+
+        let Some(editor) = self.screenshot_editor.as_mut() else {
+            return;
+        };
+        ensure_editor_texture(ctx, editor);
+        let mut close_editor = false;
+        let mut save_confirmed = false;
+        egui::Window::new(title)
+            .resizable(true)
+            .default_size(egui::vec2(900.0, 700.0))
+            .collapsible(false)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    tool_button(ui, editor, ScreenshotTool::Crop, &crop_label);
+                    if editor.selection_done {
+                        tool_button(ui, editor, ScreenshotTool::Rect, &rect_label);
+                        tool_button(ui, editor, ScreenshotTool::Circle, &circle_label);
+                        tool_button(ui, editor, ScreenshotTool::Arrow, &arrow_label);
+                        tool_button(ui, editor, ScreenshotTool::Text, &text_label);
+                    }
+                    if ui.button(&undo_label).clicked() {
+                        if editor.actions.pop().is_none() {
+                            editor.crop_rect = None;
+                            editor.selection_done = false;
+                        }
+                    }
+                    if ui.button(&cancel_label).clicked() {
+                        close_editor = true;
+                    }
+                    if ui
+                        .add_enabled(editor.selection_done, egui::Button::new(&confirm_label))
+                        .clicked()
+                    {
+                        save_confirmed = true;
+                    }
+                });
+                if !editor.selection_done {
+                    ui.label(egui::RichText::new(select_hint.clone()).small());
+                }
+                if editor.selection_done && editor.tool == ScreenshotTool::Text {
+                    ui.horizontal(|ui| {
+                        ui.label(&text_input_label);
+                        ui.text_edit_singleline(&mut editor.text_input);
+                    });
+                }
+                ui.separator();
+                if let Some(tex) = &editor.texture {
+                    let avail = ui.available_size();
+                    let tex_size = tex.size_vec2();
+                    let scale = (avail.x / tex_size.x).min(avail.y / tex_size.y).max(0.1);
+                    let draw_size = tex_size * scale;
+                    let (rect, response) =
+                        ui.allocate_exact_size(draw_size, egui::Sense::click_and_drag());
+                    ui.painter().image(
+                        tex.id(),
+                        rect,
+                        egui::Rect::from_min_size(egui::Pos2::ZERO, tex_size),
+                        egui::Color32::WHITE,
+                    );
+                    handle_editor_input(editor, &response, rect, tex_size, scale);
+                    paint_editor_overlays(ui.painter(), editor, rect, scale);
+                }
+            });
+        if close_editor {
+            self.screenshot_editor = None;
+            self.status = self.tr("已取消截图编辑", "Screenshot editing cancelled").to_string();
+        } else if save_confirmed {
+            match render_editor_to_file(editor) {
+                Ok(path) => {
+                    self.pending_file_path = Some(path.display().to_string());
+                    self.status = format!(
+                        "{}: {}",
+                        self.tr("已添加截图", "Screenshot attached"),
+                        path.display()
+                    );
+                    self.screenshot_editor = None;
+                }
+                Err(e) => {
+                    self.status = format!("{}: {e}", self.tr("截图保存失败", "Save failed"));
+                }
+            }
+        }
+    }
+
     fn poll_inbound_events(&mut self, ctx: &egui::Context) {
         let Some(rx) = self.inbound_rx.take() else {
             return;
         };
         let mut got_event = false;
+        let mut persist_sessions = false;
         while let Ok(ev) = rx.try_recv() {
             got_event = true;
             match ev {
@@ -1304,6 +2423,7 @@ impl File2FileApp {
                         recv_speed_bps: None,
                         outbound: None,
                     });
+                    persist_sessions = true;
                 }
                 InboundUiEvent::PeerFile {
                     session_id,
@@ -1337,6 +2457,7 @@ impl File2FileApp {
                     // 落盘完成，结束本次「传输会话」路由，下一轮 START 再建新索引
                     self.inbound_received_bytes.remove(&row_key);
                     self.inbound_active_file_row.remove(&row_key);
+                    persist_sessions = true;
                 }
                 InboundUiEvent::PeerFileProgress {
                     session_id,
@@ -1351,13 +2472,28 @@ impl File2FileApp {
                         received_bytes,
                     );
                 }
+                InboundUiEvent::OutboundSendProgressTick {
+                    session_id,
+                    local_id,
+                    transferred_estimate,
+                } => {
+                    self.apply_outbound_send_progress_tick(
+                        session_id,
+                        local_id,
+                        transferred_estimate,
+                    );
+                }
                 InboundUiEvent::SendResult {
                     session_id,
                     local_id,
                     ok,
                     detail,
                 } => {
-                    if let Some(s) = self.chat_sessions.iter_mut().find(|s| s.id == session_id) {
+                    if let Some(s) = self
+                        .chat_sessions
+                        .iter_mut()
+                        .find(|s| s.id == Some(session_id))
+                    {
                         if let Some(m) = s.messages.iter_mut().find(|m| m.local_id == local_id) {
                             if ok {
                                 if let (Some(total_bytes), Some(started_at)) =
@@ -1393,8 +2529,12 @@ impl File2FileApp {
                         self.status =
                             format!("{}: {detail}", self.tr("发送失败", "Send failed"));
                     }
+                    persist_sessions = true;
                 }
             }
+        }
+        if persist_sessions {
+            self.persist_all_sessions();
         }
         if got_event {
             ctx.request_repaint();
@@ -1430,7 +2570,19 @@ impl File2FileApp {
                 .to_string();
             return;
         };
-        let sid = self.chat_sessions[index].id;
+        let session = &self.chat_sessions[index];
+        if !session.ui_connected {
+            self.status = self
+                .tr("会话未连接，请先连接后再发送", "Session is offline. Connect before sending.")
+                .to_string();
+            return;
+        }
+        let Some(sid) = session.id else {
+            self.status = self
+                .tr("会话未绑定 SDK，请重新连接", "Session not bound to SDK. Please reconnect.")
+                .to_string();
+            return;
+        };
         if let Some(path_str) = self.pending_file_path.clone() {
             let path = PathBuf::from(&path_str);
             if !path.exists() {
@@ -1474,6 +2626,7 @@ impl File2FileApp {
             }
             self.status = self.tr("文件发送中…", "File is being sent...").to_string();
             self.pending_file_path = None;
+            self.persist_session_at_index(index);
 
             let tx = self.inbound_tx.clone();
             let send_ok_text = self.tr("发送成功", "Sent successfully").to_string();
@@ -1490,7 +2643,39 @@ impl File2FileApp {
                     sid,
                     &build_file_transfer_signal_start(&file_name, size_bytes),
                 );
-                let result = webrpc_send_file(handle, sid, &path_str);
+
+                // SendFile 会长时间占用 SDK；对端 PROGRESS 往往要等 SendFile 返回后才能送达。
+                // 另起一线程跑 SendFile，本线程每秒推估算进度，气泡才能持续刷新。
+                let finished = Arc::new(AtomicBool::new(false));
+                let finished_worker = finished.clone();
+                let path_for_worker = path_str.clone();
+                let worker = thread::spawn(move || {
+                    let r = webrpc_send_file(handle, sid, &path_for_worker);
+                    finished_worker.store(true, Ordering::Release);
+                    r
+                });
+
+                let tick_origin = Instant::now();
+                loop {
+                    thread::sleep(Duration::from_secs(1));
+                    if finished.load(Ordering::Acquire) {
+                        break;
+                    }
+                    let elapsed = tick_origin.elapsed().as_secs_f64();
+                    let est = estimate_outbound_transferred_bytes(size_bytes, elapsed);
+                    if let Some(ref t) = tx {
+                        let _ = t.send(InboundUiEvent::OutboundSendProgressTick {
+                            session_id: sid,
+                            local_id,
+                            transferred_estimate: est,
+                        });
+                    }
+                }
+
+                let result = match worker.join() {
+                    Ok(r) => r,
+                    Err(_) => Err("SendFile 线程异常".to_string()),
+                };
                 let _ = webrpc_send_data(
                     handle,
                     sid,
@@ -1539,6 +2724,7 @@ impl File2FileApp {
         self.status = self
             .tr("消息发送中…", "Message is being sent...")
             .to_string();
+        self.persist_session_at_index(index);
 
         let tx = self.inbound_tx.clone();
         let send_ok_text = self.tr("发送成功", "Sent successfully").to_string();
@@ -1563,28 +2749,217 @@ impl File2FileApp {
         let Some(handle) = self.client_handle else {
             return;
         };
-        let Some(session) = self.chat_sessions.get(index) else {
-            return;
-        };
-        let sid = session.id;
-        let close_result = webrpc_close_session(handle, sid);
-        self.chat_sessions.remove(index);
-        if self.chat_sessions.is_empty() {
-            self.selected_session = None;
+        let sdk_id = self.chat_sessions.get(index).and_then(|s| s.id);
+        self.persist_session_at_index(index);
+        if let Some(sid) = sdk_id {
+            let close_result = webrpc_close_session(handle, sid);
+            self.chat_sessions[index].id = None;
+            self.chat_sessions[index].ui_connected = false;
+            match close_result {
+                Ok(()) => {
+                    let kept = self.tr("历史记录已保留", "history kept");
+                    self.status = format!(
+                        "{} {sid} — {kept}",
+                        self.tr("已断开连接", "Disconnected"),
+                    );
+                }
+                Err(e) => {
+                    self.status = if self.ui_lang == UiLanguage::Zh {
+                        format!("会话 {sid} 已标记为未连接（CloseSession 异常: {e}）")
+                    } else {
+                        format!("Session {sid} marked offline (CloseSession error: {e})")
+                    };
+                }
+            }
         } else {
-            self.selected_session = Some(index.min(self.chat_sessions.len().saturating_sub(1)));
+            self.chat_sessions.remove(index);
+            if self.chat_sessions.is_empty() {
+                self.selected_session = None;
+            } else {
+                self.selected_session =
+                    Some(index.min(self.chat_sessions.len().saturating_sub(1)));
+            }
+            self.status = self
+                .tr("已从列表移除该会话", "Session removed from list")
+                .to_string();
         }
-        match close_result {
-            Ok(()) => {
-                self.status = format!("{} {sid}", self.tr("已关闭会话", "Closed session"));
-            }
-            Err(e) => {
-                self.status = if self.ui_lang == UiLanguage::Zh {
-                    format!("会话 {sid} 已在本地移除（CloseSession 返回异常: {e}）")
+    }
+
+    fn draw_session_composer_panel(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, connected: bool) {
+        egui::Frame::default()
+            .fill(egui::Color32::from_rgba_unmultiplied(10, 30, 48, SESSION_ALPHA))
+            .stroke(egui::Stroke::new(
+                1.0,
+                egui::Color32::from_rgba_unmultiplied(95, 200, 240, SESSION_ALPHA),
+            ))
+            .corner_radius(10.0)
+            .inner_margin(egui::Margin::same(10))
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(self.tr("发送区（文本/文件）", "Send Area (Text/File)"))
+                        .strong(),
+                );
+                if !connected {
+                    ui.label(
+                        egui::RichText::new(self.tr(
+                            "会话未连接，连接成功后才能发送",
+                            "Session offline. Connect before sending.",
+                        ))
+                        .small()
+                        .color(egui::Color32::from_rgb(255, 196, 140)),
+                    );
+                }
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    let sending_file = self.pending_file_path.is_some();
+                    let send_label = if sending_file {
+                        self.tr("发送文件", "Send File")
+                    } else {
+                        self.tr("发送消息", "Send Message")
+                    };
+                    let composer_hint = if sending_file {
+                        self
+                            .tr(
+                                "已选择附件。Enter发送，Ctrl+Enter换行",
+                                "Attachment selected. Enter to send, Ctrl+Enter for newline",
+                            )
+                            .to_string()
+                    } else {
+                        self
+                            .tr(
+                                "输入文本（支持多行）。Enter发送，Ctrl+Enter换行",
+                                "Type message (multi-line supported). Enter to send, Ctrl+Enter for newline",
+                            )
+                            .to_string()
+                    };
+                    let w = (ui.available_width() - 210.0).max(120.0);
+                    ui.add_enabled_ui(connected, |ui| {
+                        ui.add_sized(
+                            [w, 72.0],
+                            egui::TextEdit::multiline(&mut self.composer_input)
+                                .desired_rows(3)
+                                .return_key(egui::KeyboardShortcut::new(
+                                    egui::Modifiers::CTRL,
+                                    egui::Key::Enter,
+                                ))
+                                .hint_text(composer_hint),
+                        );
+                    });
+                    if ui
+                        .add_enabled(
+                            connected,
+                            egui::Button::new(
+                                egui::RichText::new(self.tr("选择文件", "Choose File"))
+                                    .color(egui::Color32::from_rgb(221, 244, 255)),
+                            )
+                            .fill(egui::Color32::from_rgba_unmultiplied(29, 95, 133, SESSION_ALPHA))
+                            .stroke(egui::Stroke::new(
+                                1.0,
+                                egui::Color32::from_rgba_unmultiplied(111, 198, 230, SESSION_ALPHA),
+                            )),
+                        )
+                        .clicked()
+                        && let Some(path) = rfd::FileDialog::new().pick_file()
+                    {
+                        self.pending_file_path = Some(path.display().to_string());
+                    }
+                    if ui
+                        .add_enabled(
+                            connected && !self.screenshot_in_progress,
+                            egui::Button::new(
+                                egui::RichText::new(if self.screenshot_in_progress {
+                                    self.tr("截图中…", "Capturing...")
+                                } else {
+                                    self.tr("截图", "Screenshot")
+                                })
+                                .color(egui::Color32::from_rgb(221, 244, 255)),
+                            )
+                            .fill(egui::Color32::from_rgba_unmultiplied(29, 95, 133, SESSION_ALPHA))
+                            .stroke(egui::Stroke::new(
+                                1.0,
+                                egui::Color32::from_rgba_unmultiplied(111, 198, 230, SESSION_ALPHA),
+                            )),
+                        )
+                        .clicked()
+                    {
+                        self.begin_desktop_capture(ctx);
+                    }
+                    if ui
+                        .add_enabled(
+                            connected,
+                            egui::Button::new(
+                                egui::RichText::new(send_label)
+                                    .color(egui::Color32::from_rgb(235, 249, 255)),
+                            )
+                            .fill(egui::Color32::from_rgba_unmultiplied(28, 126, 173, SESSION_ALPHA))
+                            .stroke(egui::Stroke::new(
+                                1.0,
+                                egui::Color32::from_rgba_unmultiplied(123, 216, 248, SESSION_ALPHA),
+                            )),
+                        )
+                        .clicked()
+                    {
+                        self.send_composer();
+                    }
+                });
+                if let Some(path) = self.pending_file_path.clone() {
+                    let file_name = Path::new(&path)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or(&path)
+                        .to_string();
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new(self.tr("移除附件", "Remove attachment"))
+                                            .color(egui::Color32::from_rgb(255, 235, 242)),
+                                    )
+                                    .fill(egui::Color32::from_rgba_unmultiplied(
+                                        119, 42, 76, SESSION_ALPHA,
+                                    ))
+                                    .stroke(egui::Stroke::new(
+                                        1.0,
+                                        egui::Color32::from_rgba_unmultiplied(
+                                            215, 115, 156, SESSION_ALPHA,
+                                        ),
+                                    )),
+                                )
+                                .clicked()
+                            {
+                                self.pending_file_path = None;
+                            }
+                            ui.add_space(8.0);
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(format!(
+                                        "{}: {}",
+                                        self.tr("附件", "Attachment"),
+                                        file_name
+                                    ))
+                                    .small()
+                                    .color(egui::Color32::from_rgb(180, 220, 255)),
+                                )
+                                .wrap_mode(egui::TextWrapMode::Wrap),
+                            );
+                        });
+                    });
                 } else {
-                    format!("Session {sid} removed locally (CloseSession returned error: {e})")
-                };
-            }
+                    ui.label(
+                        egui::RichText::new(self.tr(
+                            "可拖拽文件到聊天窗口，发送按钮将自动走 SendFile",
+                            "You can drag files into the chat window; send will use SendFile automatically",
+                        ))
+                        .small()
+                        .weak(),
+                    );
+                }
+            });
+        if !self.show_new_session_modal
+            && ctx.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.ctrl)
+        {
+            self.send_composer();
         }
     }
 
@@ -1592,7 +2967,9 @@ impl File2FileApp {
     fn release_webrpc_client(&mut self) {
         if let Some(handle) = self.client_handle.take() {
             for s in &self.chat_sessions {
-                let _ = webrpc_close_session(handle, s.id);
+                if let Some(sid) = s.id {
+                    let _ = webrpc_close_session(handle, sid);
+                }
             }
             webrpc_free(handle);
         }
@@ -1612,10 +2989,14 @@ impl eframe::App for File2FileApp {
         }
         self.apply_page_alpha_style(ctx, SESSION_ALPHA);
 
+        self.poll_screenshot_hotkey(ctx);
         self.poll_open_session_worker(ctx);
+        self.poll_screenshot_worker(ctx);
         self.poll_inbound_events(ctx);
+        self.maybe_sync_passive_sdk_sessions();
         self.consume_dropped_files(ctx);
         ctx.request_repaint_after(Duration::from_millis(33));
+        self.draw_screenshot_editor(ctx);
 
         if self.show_new_session_modal {
             egui::Window::new(self.tr("新建会话", "New Session"))
@@ -1698,6 +3079,174 @@ impl eframe::App for File2FileApp {
                 });
         }
 
+        if self.show_reconnect_confirm {
+            let mut close_confirm = false;
+            let mut do_connect = false;
+            let peer_label = self
+                .reconnect_confirm_index
+                .and_then(|i| self.chat_sessions.get(i))
+                .map(|s| {
+                    Self::session_primary_label(
+                        &s.remark,
+                        &s.peer_token,
+                        self.tr("对端", "Peer"),
+                    )
+                })
+                .unwrap_or_default();
+            egui::Window::new(self.tr("连接会话", "Connect Session"))
+                .id(egui::Id::new("reconnect_session_confirm"))
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .frame(
+                    egui::Frame::default()
+                        .fill(egui::Color32::from_rgba_unmultiplied(6, 20, 36, SESSION_ALPHA))
+                        .stroke(egui::Stroke::new(
+                            1.0,
+                            egui::Color32::from_rgba_unmultiplied(90, 210, 255, SESSION_ALPHA),
+                        ))
+                        .corner_radius(10.0)
+                        .inner_margin(egui::Margin::same(14)),
+                )
+                .show(ctx, |ui| {
+                    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        close_confirm = true;
+                    }
+                    ui.label(self.tr(
+                        "是否连接该会话？连接成功后可继续收发消息。",
+                        "Connect to this session? You can send and receive after connected.",
+                    ));
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}: {peer_label}",
+                            self.tr("对端 Token", "Peer Token")
+                        ))
+                        .strong(),
+                    );
+                    if let Some(err) = self.session_connect_error.as_ref() {
+                        ui.add_space(6.0);
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{}: {err}",
+                                self.tr("连接失败", "Connection failed")
+                            ))
+                            .color(egui::Color32::from_rgb(255, 120, 120)),
+                        );
+                    }
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        let busy = self.open_session_busy;
+                        if ui
+                            .add_enabled(
+                                !busy,
+                                egui::Button::new(if busy {
+                                    self.tr("连接中…", "Connecting...")
+                                } else {
+                                    self.tr("确认连接", "Connect")
+                                }),
+                            )
+                            .clicked()
+                        {
+                            do_connect = true;
+                        }
+                        if ui.button(self.tr("取消", "Cancel")).clicked() {
+                            close_confirm = true;
+                        }
+                    });
+                });
+            if close_confirm {
+                self.show_reconnect_confirm = false;
+                self.reconnect_confirm_index = None;
+                self.session_connect_error = None;
+            }
+            if do_connect {
+                if let Some(idx) = self.reconnect_confirm_index {
+                    self.begin_reconnect_session(idx);
+                }
+            }
+        }
+
+        if self.show_session_remark_modal {
+            let mut save_remark = false;
+            let mut cancel_remark = false;
+            let peer_hint = self
+                .remark_edit_index
+                .and_then(|i| self.chat_sessions.get(i))
+                .map(|s| s.peer_token.clone())
+                .unwrap_or_default();
+            egui::Window::new(self.tr("会话备注", "Session Remark"))
+                .id(egui::Id::new("session_remark_modal"))
+                .collapsible(false)
+                .resizable(true)
+                .default_width(400.0)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .frame(
+                    egui::Frame::default()
+                        .fill(egui::Color32::from_rgba_unmultiplied(6, 20, 36, SESSION_ALPHA))
+                        .stroke(egui::Stroke::new(
+                            1.0,
+                            egui::Color32::from_rgba_unmultiplied(90, 210, 255, SESSION_ALPHA),
+                        ))
+                        .corner_radius(10.0)
+                        .inner_margin(egui::Margin::same(14)),
+                )
+                .show(ctx, |ui| {
+                    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        cancel_remark = true;
+                    }
+                    ui.label(self.tr(
+                        "为当前会话设置备注（如对方姓名、公司等），便于识别聊天对象。",
+                        "Set a remark for this session (e.g. name, company) to identify the contact.",
+                    ));
+                    if !peer_hint.trim().is_empty() {
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{}: {peer_hint}",
+                                self.tr("对端 Token", "Peer Token")
+                            ))
+                            .small()
+                            .weak(),
+                        );
+                    }
+                    ui.add_space(8.0);
+                    ui.label(self.tr("备注", "Remark"));
+                    let remark_hint = self
+                        .tr("例如：张三 / 某某公司", "e.g. John / ACME Corp")
+                        .to_string();
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.remark_edit_draft)
+                            .hint_text(remark_hint)
+                            .desired_width(f32::INFINITY),
+                    );
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new(self.tr("保存", "Save"))
+                                        .color(egui::Color32::from_rgb(231, 247, 255)),
+                                )
+                                .fill(egui::Color32::from_rgb(25, 109, 150)),
+                            )
+                            .clicked()
+                        {
+                            save_remark = true;
+                        }
+                        if ui.button(self.tr("取消", "Cancel")).clicked() {
+                            cancel_remark = true;
+                        }
+                    });
+                });
+            if save_remark {
+                self.save_session_remark();
+            } else if cancel_remark {
+                self.show_session_remark_modal = false;
+                self.remark_edit_index = None;
+            }
+        }
+
         egui::TopBottomPanel::top("top")
             .frame(
                 egui::Frame::default()
@@ -1772,13 +3321,20 @@ impl eframe::App for File2FileApp {
                         self.inbound_rx = None;
                         self.inbound_tx = None;
                         self.is_logging_in = false;
+                        self.persist_all_sessions();
                         self.release_webrpc_client();
                         self.chat_sessions.clear();
                         self.selected_session = None;
                         self.show_new_session_modal = false;
+                        self.show_reconnect_confirm = false;
+                        self.reconnect_confirm_index = None;
+                        self.open_session_target_index = None;
+                        self.session_connect_error = None;
+                        self.show_session_remark_modal = false;
+                        self.remark_edit_index = None;
                         self.current_user = None;
-                        self.login_password.clear();
                         self.active_login_permission.clear();
+                        self.refill_login_from_cache();
                         self.login_message.clear();
                         self.login_error = false;
                         self.composer_input.clear();
@@ -1798,9 +3354,10 @@ impl eframe::App for File2FileApp {
         });
 
         egui::SidePanel::left("sessions")
-            .resizable(true)
+            .resizable(false)
             .default_width(280.0)
-            .min_width(220.0)
+            .min_width(280.0)
+            .max_width(280.0)
             .frame(
                 egui::Frame::default()
                     .fill(egui::Color32::from_rgba_unmultiplied(8, 28, 44, SESSION_ALPHA))
@@ -1835,48 +3392,120 @@ impl eframe::App for File2FileApp {
                 ui.separator();
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     for i in 0..self.chat_sessions.len() {
-                        let (sid, cached_peer) = {
+                        let (sdk_id, cached_peer, connected, remark) = {
                             let s = &self.chat_sessions[i];
-                            (s.id, s.peer_token.clone())
-                        };
-                        let peer = self.peer_token_for_session_info(sid, &cached_peer);
-                        if peer != cached_peer {
-                            self.chat_sessions[i].peer_token = peer.clone();
-                        }
-                        let display_peer = if peer.trim().is_empty() {
-                            self.tr("对端", "Peer").to_string()
-                        } else {
-                            peer
-                        };
-                        let is_selected = self.selected_session == Some(i);
-                        let label = format!("{}\nSID {}", display_peer, sid);
-                        let card_fill = if is_selected {
-                            egui::Color32::from_rgba_unmultiplied(28, 100, 145, SESSION_ALPHA)
-                        } else {
-                            egui::Color32::from_rgba_unmultiplied(12, 52, 78, SESSION_ALPHA)
-                        };
-                        if ui
-                            .add_sized(
-                                [ui.available_width(), 56.0],
-                                egui::Button::new(
-                                    egui::RichText::new(label)
-                                        .size(14.0)
-                                        .color(egui::Color32::from_rgb(214, 244, 255)),
-                                )
-                                .fill(card_fill)
-                                .stroke(egui::Stroke::new(
-                                    1.0,
-                                    if is_selected {
-                                        egui::Color32::from_rgba_unmultiplied(130, 230, 255, SESSION_ALPHA)
-                                    } else {
-                                        egui::Color32::from_rgba_unmultiplied(55, 140, 185, SESSION_ALPHA)
-                                    },
-                                )),
+                            (
+                                s.id,
+                                s.peer_token.clone(),
+                                s.ui_connected,
+                                s.remark.clone(),
                             )
-                            .clicked()
-                        {
-                            self.selected_session = Some(i);
+                        };
+                        let peer = if let Some(sid) = sdk_id {
+                            let resolved = self.peer_token_for_session_info(sid, &cached_peer);
+                            if resolved != cached_peer {
+                                self.chat_sessions[i].peer_token = resolved.clone();
+                            }
+                            resolved
+                        } else {
+                            cached_peer
+                        };
+                        let peer_fallback = self.tr("对端", "Peer");
+                        let primary = Self::session_primary_label(&remark, &peer, peer_fallback);
+                        let is_selected = self.selected_session == Some(i);
+                        let status_line = if connected {
+                            format!("SID {}", sdk_id.unwrap_or(0))
+                        } else if sdk_id.is_some() {
+                            self.tr("待确认", "Pending").to_string()
+                        } else {
+                            self.tr("未连接", "Offline").to_string()
+                        };
+                        let mut label_lines = vec![primary];
+                        if let Some(token_line) = Self::session_subtitle_token(&remark, &peer) {
+                            label_lines.push(token_line);
                         }
+                        label_lines.push(status_line);
+                        let label = label_lines.join("\n");
+                        let card_fill = if is_selected {
+                            if connected {
+                                egui::Color32::from_rgba_unmultiplied(28, 100, 145, SESSION_ALPHA)
+                            } else {
+                                egui::Color32::from_rgba_unmultiplied(52, 58, 92, SESSION_ALPHA)
+                            }
+                        } else if connected {
+                            egui::Color32::from_rgba_unmultiplied(12, 52, 78, SESSION_ALPHA)
+                        } else {
+                            egui::Color32::from_rgba_unmultiplied(28, 32, 58, SESSION_ALPHA)
+                        };
+                        let text_color = if connected {
+                            egui::Color32::from_rgb(214, 244, 255)
+                        } else {
+                            egui::Color32::from_rgb(178, 186, 214)
+                        };
+                        let row_h = 58.0;
+                        const REMARK_BTN_W: f32 = 44.0;
+                        ui.horizontal(|ui| {
+                            let dot_col_w = 22.0;
+                            let (dot_area, _) = ui.allocate_exact_size(
+                                egui::vec2(dot_col_w, row_h),
+                                egui::Sense::hover(),
+                            );
+                            let dot_center = egui::pos2(
+                                dot_area.left() + dot_col_w * 0.5,
+                                dot_area.center().y,
+                            );
+                            Self::paint_session_connection_dot(ui, dot_center, connected);
+                            let session_btn_w =
+                                (ui.available_width() - REMARK_BTN_W - 6.0).max(48.0);
+                            if ui
+                                .add_sized(
+                                    [session_btn_w, row_h],
+                                    egui::Button::new(
+                                        egui::RichText::new(label).size(14.0).color(text_color),
+                                    )
+                                    .fill(card_fill)
+                                    .stroke(egui::Stroke::new(
+                                        1.0,
+                                        if is_selected {
+                                            egui::Color32::from_rgba_unmultiplied(
+                                                130, 230, 255, SESSION_ALPHA,
+                                            )
+                                        } else if connected {
+                                            egui::Color32::from_rgba_unmultiplied(
+                                                55, 140, 185, SESSION_ALPHA,
+                                            )
+                                        } else {
+                                            egui::Color32::from_rgba_unmultiplied(
+                                                90, 98, 140, SESSION_ALPHA,
+                                            )
+                                        },
+                                    )),
+                                )
+                                .clicked()
+                            {
+                                self.selected_session = Some(i);
+                                self.session_connect_error = None;
+                            }
+                            if ui
+                                .add_sized(
+                                    [REMARK_BTN_W, row_h],
+                                    egui::Button::new(
+                                        egui::RichText::new(self.tr("备注", "Remark"))
+                                            .size(12.0)
+                                            .color(egui::Color32::from_rgb(210, 228, 248)),
+                                    )
+                                    .fill(egui::Color32::from_rgba_unmultiplied(40, 72, 98, SESSION_ALPHA))
+                                    .stroke(egui::Stroke::new(
+                                        1.0,
+                                        egui::Color32::from_rgba_unmultiplied(90, 160, 200, SESSION_ALPHA),
+                                    )),
+                                )
+                                .clicked()
+                            {
+                                self.selected_session = Some(i);
+                                self.open_session_remark_editor(i);
+                            }
+                        });
                         ui.add_space(4.0);
                     }
                 });
@@ -1899,19 +3528,35 @@ impl eframe::App for File2FileApp {
                         s.id,
                         s.peer_token.clone(),
                         s.permission.clone(),
+                        s.remark.clone(),
                         s.messages.clone(),
+                        s.ui_connected,
                     )
                 });
-                if let Some((sid, fallback_peer, perm, messages)) = meta {
-                    let peer_token = self.peer_token_for_session_info(sid, &fallback_peer);
+                if let Some((sdk_id, fallback_peer, perm, remark, messages, connected)) = meta {
+                    let peer_token = if let Some(sid) = sdk_id {
+                        self.peer_token_for_session_info(sid, &fallback_peer)
+                    } else {
+                        fallback_peer
+                    };
                     let close_idx = index;
+                    let display_title = Self::session_primary_label(
+                        &remark,
+                        &peer_token,
+                        self.tr("对端", "Peer"),
+                    );
                     ui.horizontal(|ui| {
+                        let (dot_area, _) = ui.allocate_exact_size(
+                            egui::vec2(18.0, 28.0),
+                            egui::Sense::hover(),
+                        );
+                        Self::paint_session_connection_dot(ui, dot_area.center(), connected);
                         ui.heading(
                             egui::RichText::new(format!(
-                                "{} {peer_token}",
+                                "{} {display_title}",
                                 self.tr("与", "Chat with")
                             ))
-                                .color(egui::Color32::from_rgb(215, 218, 255)),
+                            .color(egui::Color32::from_rgb(215, 218, 255)),
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui
@@ -1927,25 +3572,112 @@ impl eframe::App for File2FileApp {
                             {
                                 self.close_session_at_index(close_idx);
                             }
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new(self.tr("备注", "Remark"))
+                                            .color(egui::Color32::from_rgb(221, 244, 255)),
+                                    )
+                                    .fill(egui::Color32::from_rgba_unmultiplied(29, 95, 133, SESSION_ALPHA))
+                                    .stroke(egui::Stroke::new(
+                                        1.0,
+                                        egui::Color32::from_rgba_unmultiplied(111, 198, 230, SESSION_ALPHA),
+                                    )),
+                                )
+                                .clicked()
+                            {
+                                self.open_session_remark_editor(close_idx);
+                            }
                         });
                     });
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{}: {} · Permission: {}",
+                    if let Some(token_line) = Self::session_subtitle_token(&remark, &peer_token) {
+                        ui.label(
+                            egui::RichText::new(format!("Token: {token_line}"))
+                                .small()
+                                .weak(),
+                        );
+                    }
+                    let remark_meta = if remark.trim().is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            "{}: {} · ",
+                            self.tr("备注", "Remark"),
+                            remark.trim()
+                        )
+                    };
+                    let perm_text = if perm.is_empty() {
+                        self.tr("（空）", "(empty)").to_string()
+                    } else {
+                        perm
+                    };
+                    let session_meta = if connected {
+                        format!(
+                            "{}{}: {} · {}: {} · Permission: {}",
+                            remark_meta,
+                            self.tr("状态", "Status"),
+                            self.tr("已连接", "Connected"),
                             self.tr("会话 ID", "Session ID"),
-                            sid,
-                            if perm.is_empty() {
-                                self.tr("（空）", "(empty)").to_string()
-                            } else {
-                                perm
+                            sdk_id.unwrap_or(0),
+                            perm_text
+                        )
+                    } else if sdk_id.is_some() {
+                        format!(
+                            "{}{}: {} · Permission: {}",
+                            remark_meta,
+                            self.tr("状态", "Status"),
+                            self.tr("对端已连入，待确认", "Peer connected, pending accept"),
+                            perm_text
+                        )
+                    } else {
+                        format!(
+                            "{}{}: {} · Permission: {}",
+                            remark_meta,
+                            self.tr("状态", "Status"),
+                            self.tr("未连接（仅显示本地历史）", "Offline (local history only)"),
+                            perm_text
+                        )
+                    };
+                    ui.label(egui::RichText::new(session_meta).weak().small());
+                    if !connected {
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(self.tr(
+                                    "点击左侧会话或下方按钮可重新连接",
+                                    "Click the session in the sidebar or use the button below to reconnect",
+                                ))
+                                .color(egui::Color32::from_rgb(255, 210, 130)),
+                            );
+                            if ui
+                                .add_enabled(
+                                    !self.open_session_busy,
+                                    egui::Button::new(if self.open_session_busy {
+                                        self.tr("连接中…", "Connecting...")
+                                    } else {
+                                        self.tr("连接此会话", "Connect")
+                                    }),
+                                )
+                                .clicked()
+                            {
+                                self.reconnect_confirm_index = Some(close_idx);
+                                self.show_reconnect_confirm = true;
+                                self.session_connect_error = None;
                             }
-                        ))
-                        .weak()
-                        .small(),
-                    );
-                    ui.add_space(8.0);
+                        });
+                        if let Some(err) = self.session_connect_error.as_ref() {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{}: {err}",
+                                    self.tr("连接失败", "Connection failed")
+                                ))
+                                .color(egui::Color32::from_rgb(255, 120, 120)),
+                            );
+                        }
+                    }
+                    ui.separator();
                     let mut open_err: Option<String> = None;
-                    // 预留底部发送区高度，避免选择附件后发送区被挤出可视范围。
+                    // 预留底部发送区高度，避免消息列表被挤出可视范围。
                     let reserved_for_sender = if self.pending_file_path.is_some() {
                         190.0
                     } else {
@@ -2227,153 +3959,9 @@ impl eframe::App for File2FileApp {
                     if let Some(err) = open_err {
                         self.status = err;
                     }
-
                     ui.add_space(8.0);
                     ui.separator();
-                    egui::Frame::default()
-                        .fill(egui::Color32::from_rgba_unmultiplied(10, 30, 48, SESSION_ALPHA))
-                        .stroke(egui::Stroke::new(
-                            1.0,
-                            egui::Color32::from_rgba_unmultiplied(95, 200, 240, SESSION_ALPHA),
-                        ))
-                        .corner_radius(10.0)
-                        .inner_margin(egui::Margin::same(10))
-                        .show(ui, |ui| {
-                        ui.label(
-                            egui::RichText::new(self.tr("发送区（文本/文件）", "Send Area (Text/File)"))
-                                .strong(),
-                        );
-                        ui.add_space(4.0);
-                        ui.horizontal(|ui| {
-                            let sending_file = self.pending_file_path.is_some();
-                            let send_label = if sending_file {
-                                self.tr("发送文件", "Send File")
-                            } else {
-                                self.tr("发送消息", "Send Message")
-                            };
-                            let composer_hint = if sending_file {
-                                self.tr(
-                                    "已选择附件。Enter发送，Ctrl+Enter换行",
-                                    "Attachment selected. Enter to send, Ctrl+Enter for newline",
-                                )
-                                .to_string()
-                            } else {
-                                self.tr(
-                                    "输入文本（支持多行）。Enter发送，Ctrl+Enter换行",
-                                    "Type message (multi-line supported). Enter to send, Ctrl+Enter for newline",
-                                )
-                                .to_string()
-                            };
-                            let w = (ui.available_width() - 210.0).max(120.0);
-                            ui.add_sized(
-                                [w, 72.0],
-                                egui::TextEdit::multiline(&mut self.composer_input)
-                                    .desired_rows(3)
-                                    .return_key(egui::KeyboardShortcut::new(
-                                        egui::Modifiers::CTRL,
-                                        egui::Key::Enter,
-                                    ))
-                                    .hint_text(composer_hint),
-                            );
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        egui::RichText::new(self.tr("选择文件", "Choose File"))
-                                            .color(egui::Color32::from_rgb(221, 244, 255)),
-                                    )
-                                    .fill(egui::Color32::from_rgba_unmultiplied(29, 95, 133, SESSION_ALPHA))
-                                    .stroke(egui::Stroke::new(
-                                        1.0,
-                                        egui::Color32::from_rgba_unmultiplied(111, 198, 230, SESSION_ALPHA),
-                                    )),
-                                )
-                                .clicked()
-                                && let Some(path) = rfd::FileDialog::new().pick_file()
-                            {
-                                self.pending_file_path = Some(path.display().to_string());
-                            }
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        egui::RichText::new(send_label)
-                                            .color(egui::Color32::from_rgb(235, 249, 255)),
-                                    )
-                                    .fill(egui::Color32::from_rgba_unmultiplied(28, 126, 173, SESSION_ALPHA))
-                                    .stroke(egui::Stroke::new(
-                                        1.0,
-                                        egui::Color32::from_rgba_unmultiplied(123, 216, 248, SESSION_ALPHA),
-                                    )),
-                                )
-                                .clicked()
-                            {
-                                self.send_composer();
-                            }
-                        });
-                        if let Some(path) = self.pending_file_path.clone() {
-                            let file_name = Path::new(&path)
-                                .file_name()
-                                .and_then(|name| name.to_str())
-                                .unwrap_or(&path)
-                                .to_string();
-                            ui.horizontal(|ui| {
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        if ui
-                                            .add(
-                                                egui::Button::new(
-                                                    egui::RichText::new(
-                                                        self.tr(
-                                                            "移除附件",
-                                                            "Remove attachment",
-                                                        ),
-                                                    )
-                                                    .color(egui::Color32::from_rgb(
-                                                        255, 235, 242,
-                                                    )),
-                                                )
-                                                .fill(egui::Color32::from_rgba_unmultiplied(119, 42, 76, SESSION_ALPHA))
-                                                .stroke(egui::Stroke::new(
-                                                    1.0,
-                                                    egui::Color32::from_rgba_unmultiplied(215, 115, 156, SESSION_ALPHA),
-                                                )),
-                                            )
-                                            .clicked()
-                                        {
-                                            self.pending_file_path = None;
-                                        }
-                                        ui.add_space(8.0);
-                                        ui.add(
-                                            egui::Label::new(
-                                                egui::RichText::new(format!(
-                                                    "{}: {}",
-                                                    self.tr("附件", "Attachment"),
-                                                    file_name
-                                                ))
-                                                .small()
-                                                .color(egui::Color32::from_rgb(180, 220, 255)),
-                                            )
-                                            .wrap_mode(egui::TextWrapMode::Wrap),
-                                        );
-                                    },
-                                );
-                        });
-                        } else {
-                            ui.label(
-                                egui::RichText::new(self.tr(
-                                    "可拖拽文件到聊天窗口，发送按钮将自动走 SendFile",
-                                    "You can drag files into the chat window; send will use SendFile automatically",
-                                ))
-                                    .small()
-                                    .weak(),
-                            );
-                        }
-                    });
-                    if !self.show_new_session_modal
-                        && ctx.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.ctrl)
-                    {
-                        self.send_composer();
-                    }
+                    self.draw_session_composer_panel(ctx, ui, connected);
                 } else {
                     ui.label(self.tr(
                         "会话不存在，请在左侧新建会话。",
@@ -2479,6 +4067,341 @@ fn format_file_size(bytes: u64) -> String {
         format!("{:.2} KB", bytes as f64 / KB as f64)
     } else {
         format!("{bytes} B")
+    }
+}
+
+/// SendFile 阻塞、对端 PROGRESS 进不来时的「已传字节」保守曲线（单调、不超过 size），仅用于发送气泡。
+fn estimate_outbound_transferred_bytes(size_bytes: u64, elapsed_secs: f64) -> u64 {
+    if size_bytes == 0 {
+        return 0;
+    }
+    let elapsed = elapsed_secs.max(0.001);
+    // 按约 3 MiB/s 估算目标时长，让中小文件更快脱离“计算中”，同时保持单调且不过满。
+    let ref_rate: f64 = 3.0 * 1024.0 * 1024.0;
+    let t_ref = (size_bytes as f64 / ref_rate).max(1.5).min(300.0);
+    // 使用平滑曲线：前段起步快、后段逐渐放缓，避免体感“卡在 0”或“太快冲满”。
+    let x = (elapsed / t_ref).clamp(0.0, 1.0);
+    let smooth = x * x * (3.0 - 2.0 * x); // smoothstep
+    let p = (0.02 + 0.968 * smooth).min(0.988);
+    let est = (size_bytes as f64 * p).round() as u64;
+    est.min(size_bytes)
+}
+
+fn load_screenshot_editor_state(path: &Path) -> Result<ScreenshotEditorState, String> {
+    let img = image::open(path)
+        .map_err(|e| format!("读取截图失败: {e}"))?
+        .to_rgba8();
+    Ok(ScreenshotEditorState {
+        source_image: img,
+        texture: None,
+        crop_rect: None,
+        actions: Vec::new(),
+        tool: ScreenshotTool::Crop,
+        pending_drag_start: None,
+        pending_drag_now: None,
+        text_input: "note".to_string(),
+        selection_done: false,
+    })
+}
+
+fn ensure_editor_texture(ctx: &egui::Context, editor: &mut ScreenshotEditorState) {
+    if editor.texture.is_some() {
+        return;
+    }
+    let size = [editor.source_image.width() as usize, editor.source_image.height() as usize];
+    let pixels = editor.source_image.as_raw();
+    let image = egui::ColorImage::from_rgba_unmultiplied(size, pixels);
+    editor.texture = Some(ctx.load_texture("screenshot-editor", image, Default::default()));
+}
+
+fn tool_button(ui: &mut egui::Ui, editor: &mut ScreenshotEditorState, t: ScreenshotTool, label: &str) {
+    let selected = editor.tool == t;
+    if ui.selectable_label(selected, label).clicked() {
+        editor.tool = t;
+    }
+}
+
+fn map_to_image_pos(rect: egui::Rect, tex_size: egui::Vec2, p: egui::Pos2) -> egui::Pos2 {
+    let x = ((p.x - rect.min.x) / rect.width()).clamp(0.0, 1.0) * tex_size.x;
+    let y = ((p.y - rect.min.y) / rect.height()).clamp(0.0, 1.0) * tex_size.y;
+    egui::pos2(x, y)
+}
+
+fn map_from_image_pos(rect: egui::Rect, tex_size: egui::Vec2, p: egui::Pos2) -> egui::Pos2 {
+    egui::pos2(
+        rect.min.x + (p.x / tex_size.x) * rect.width(),
+        rect.min.y + (p.y / tex_size.y) * rect.height(),
+    )
+}
+
+fn handle_editor_input(
+    editor: &mut ScreenshotEditorState,
+    response: &egui::Response,
+    rect: egui::Rect,
+    tex_size: egui::Vec2,
+    _scale: f32,
+) {
+    let effective_tool = if editor.selection_done {
+        editor.tool
+    } else {
+        ScreenshotTool::Crop
+    };
+    if response.clicked()
+        && effective_tool == ScreenshotTool::Text
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        let image_pos = map_to_image_pos(rect, tex_size, pos);
+        let text = editor.text_input.trim().to_string();
+        if !text.is_empty() {
+            editor.actions.push(ScreenshotAction::Text { pos: image_pos, text });
+        }
+    }
+    if response.drag_started()
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        let image_pos = map_to_image_pos(rect, tex_size, pos);
+        editor.pending_drag_start = Some(image_pos);
+        editor.pending_drag_now = Some(image_pos);
+    }
+    if response.dragged()
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        editor.pending_drag_now = Some(map_to_image_pos(rect, tex_size, pos));
+    }
+    if response.drag_stopped()
+        && let (Some(start), Some(end)) = (editor.pending_drag_start, editor.pending_drag_now)
+    {
+        match effective_tool {
+            ScreenshotTool::Crop => {
+                editor.crop_rect = Some((start, end));
+                editor.selection_done = true;
+            }
+            ScreenshotTool::Rect => editor.actions.push(ScreenshotAction::Rect { start, end }),
+            ScreenshotTool::Circle => editor.actions.push(ScreenshotAction::Circle { start, end }),
+            ScreenshotTool::Arrow => editor.actions.push(ScreenshotAction::Arrow { start, end }),
+            ScreenshotTool::Text => {}
+        }
+        editor.pending_drag_start = None;
+        editor.pending_drag_now = None;
+    }
+}
+
+fn paint_editor_overlays(
+    painter: &egui::Painter,
+    editor: &ScreenshotEditorState,
+    draw_rect: egui::Rect,
+    _scale: f32,
+) {
+    let tex_size = egui::vec2(
+        editor.source_image.width() as f32,
+        editor.source_image.height() as f32,
+    );
+    let stroke = egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 70, 70));
+    if let Some((a, b)) = editor.crop_rect {
+        let pa = map_from_image_pos(draw_rect, tex_size, a);
+        let pb = map_from_image_pos(draw_rect, tex_size, b);
+        painter.rect_stroke(
+            egui::Rect::from_two_pos(pa, pb),
+            0.0,
+            egui::Stroke::new(2.0, egui::Color32::from_rgb(90, 220, 255)),
+            egui::StrokeKind::Outside,
+        );
+    }
+    for action in &editor.actions {
+        match action {
+            ScreenshotAction::Rect { start, end } => {
+                let pa = map_from_image_pos(draw_rect, tex_size, *start);
+                let pb = map_from_image_pos(draw_rect, tex_size, *end);
+                painter.rect_stroke(
+                    egui::Rect::from_two_pos(pa, pb),
+                    0.0,
+                    stroke,
+                    egui::StrokeKind::Outside,
+                );
+            }
+            ScreenshotAction::Circle { start, end } => {
+                let pa = map_from_image_pos(draw_rect, tex_size, *start);
+                let pb = map_from_image_pos(draw_rect, tex_size, *end);
+                let c = egui::pos2((pa.x + pb.x) * 0.5, (pa.y + pb.y) * 0.5);
+                let rx = (pa.x - pb.x).abs() * 0.5;
+                let ry = (pa.y - pb.y).abs() * 0.5;
+                let r = rx.max(ry);
+                painter.circle_stroke(c, r, stroke);
+            }
+            ScreenshotAction::Arrow { start, end } => {
+                let a = map_from_image_pos(draw_rect, tex_size, *start);
+                let b = map_from_image_pos(draw_rect, tex_size, *end);
+                painter.line_segment([a, b], stroke);
+            }
+            ScreenshotAction::Text { pos, text } => {
+                let p = map_from_image_pos(draw_rect, tex_size, *pos);
+                painter.text(
+                    p,
+                    egui::Align2::LEFT_TOP,
+                    text,
+                    egui::FontId::proportional(18.0),
+                    egui::Color32::from_rgb(255, 70, 70),
+                );
+            }
+        }
+    }
+    if let (Some(start), Some(now)) = (editor.pending_drag_start, editor.pending_drag_now) {
+        let pa = map_from_image_pos(draw_rect, tex_size, start);
+        let pb = map_from_image_pos(draw_rect, tex_size, now);
+        painter.rect_stroke(
+            egui::Rect::from_two_pos(pa, pb),
+            0.0,
+            egui::Stroke::new(1.0, egui::Color32::YELLOW),
+            egui::StrokeKind::Outside,
+        );
+    }
+}
+
+fn render_editor_to_file(editor: &ScreenshotEditorState) -> Result<PathBuf, String> {
+    let mut img = editor.source_image.clone();
+    let red = Rgba([255u8, 60u8, 60u8, 255u8]);
+    for action in &editor.actions {
+        match action {
+            ScreenshotAction::Rect { start, end } => {
+                let x = start.x.min(end.x).max(0.0) as i32;
+                let y = start.y.min(end.y).max(0.0) as i32;
+                let w = (start.x - end.x).abs().max(1.0) as u32;
+                let h = (start.y - end.y).abs().max(1.0) as u32;
+                draw_hollow_rect_mut(&mut img, Rect::at(x, y).of_size(w, h), red);
+            }
+            ScreenshotAction::Circle { start, end } => {
+                let cx = ((start.x + end.x) * 0.5).max(0.0) as i32;
+                let cy = ((start.y + end.y) * 0.5).max(0.0) as i32;
+                let r = ((start.x - end.x).abs().max((start.y - end.y).abs()) * 0.5).max(1.0);
+                draw_hollow_circle_mut(&mut img, (cx, cy), r as i32, red);
+            }
+            ScreenshotAction::Arrow { start, end } => {
+                draw_line_segment_mut(&mut img, (start.x, start.y), (end.x, end.y), red);
+                let dx = end.x - start.x;
+                let dy = end.y - start.y;
+                let len = (dx * dx + dy * dy).sqrt().max(1.0);
+                let ux = dx / len;
+                let uy = dy / len;
+                let size = 14.0;
+                let left = (end.x - ux * size - uy * size * 0.6, end.y - uy * size + ux * size * 0.6);
+                let right = (end.x - ux * size + uy * size * 0.6, end.y - uy * size - ux * size * 0.6);
+                draw_line_segment_mut(&mut img, (end.x, end.y), left, red);
+                draw_line_segment_mut(&mut img, (end.x, end.y), right, red);
+            }
+            ScreenshotAction::Text { pos, text } => {
+                if let Some(font) = load_annotation_font() {
+                    draw_text_mut(
+                        &mut img,
+                        red,
+                        pos.x.max(0.0) as i32,
+                        pos.y.max(0.0) as i32,
+                        PxScale::from(26.0),
+                        &font,
+                        text,
+                    );
+                }
+            }
+        }
+    }
+    if let Some((a, b)) = editor.crop_rect {
+        let x = a.x.min(b.x).max(0.0) as u32;
+        let y = a.y.min(b.y).max(0.0) as u32;
+        let w = (a.x - b.x).abs().max(1.0) as u32;
+        let h = (a.y - b.y).abs().max(1.0) as u32;
+        let vw = img.width().saturating_sub(x).max(1);
+        let vh = img.height().saturating_sub(y).max(1);
+        let cw = w.min(vw);
+        let ch = h.min(vh);
+        img = image::imageops::crop_imm(&img, x, y, cw, ch).to_image();
+    }
+    let dir = File2FileApp::ensure_app_root().join("screenshots");
+    fs::create_dir_all(&dir).map_err(|e| format!("创建截图目录失败: {e}"))?;
+    let stamp = Local::now().format("%Y%m%d_%H%M%S_%3f");
+    let out = dir.join(format!("screenshot_v3_{stamp}.png"));
+    img.save(&out).map_err(|e| format!("保存截图失败: {e}"))?;
+    Ok(out)
+}
+
+fn load_annotation_font() -> Option<FontArc> {
+    let candidates = [
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/System/Library/Fonts/PingFang.ttc",
+        "C:\\Windows\\Fonts\\msyh.ttc",
+        "C:\\Windows\\Fonts\\arial.ttf",
+    ];
+    for p in candidates {
+        if let Ok(bytes) = fs::read(p)
+            && let Ok(font) = FontArc::try_from_vec(bytes)
+        {
+            return Some(font);
+        }
+    }
+    None
+}
+
+fn capture_desktop_screenshot_file() -> Result<PathBuf, String> {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        let screens = Screen::all().map_err(|e| format!("列出屏幕失败: {e}"))?;
+        let screen = screens
+            .into_iter()
+            .max_by_key(|s| i64::from(s.display_info.width) * i64::from(s.display_info.height))
+            .ok_or_else(|| "未检测到可用屏幕".to_string())?;
+        let image = screen.capture().map_err(|e| format!("截图失败: {e}"))?;
+        let dir = File2FileApp::ensure_app_root().join("screenshots");
+        fs::create_dir_all(&dir).map_err(|e| format!("创建截图目录失败: {e}"))?;
+        let stamp = Local::now().format("%Y%m%d_%H%M%S_%3f");
+        let file_path = dir.join(format!("screenshot_{stamp}.png"));
+        image
+            .save(&file_path)
+            .map_err(|e| format!("保存截图失败: {e}"))?;
+        return Ok(file_path);
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::Command;
+
+        let dir = File2FileApp::ensure_app_root().join("screenshots");
+        fs::create_dir_all(&dir).map_err(|e| format!("创建截图目录失败: {e}"))?;
+        let stamp = Local::now().format("%Y%m%d_%H%M%S_%3f");
+        let file_path = dir.join(format!("screenshot_{stamp}.png"));
+        let out = file_path.to_string_lossy().to_string();
+        // Linux 下尝试常见截图工具（避免额外链接系统图形库）。
+        let ok_grim = Command::new("grim")
+            .arg(&out)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok_grim && file_path.exists() {
+            return Ok(file_path);
+        }
+        let ok_gnome = Command::new("gnome-screenshot")
+            .args(["-f", &out])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok_gnome && file_path.exists() {
+            return Ok(file_path);
+        }
+        let ok_scrot = Command::new("scrot")
+            .arg(&out)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok_scrot && file_path.exists() {
+            return Ok(file_path);
+        }
+
+        Err(
+            "Linux 截图失败：请安装 grim 或 gnome-screenshot 或 scrot，并确保图形会话可用"
+                .to_string(),
+        )
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        Err("当前平台暂不支持截图".to_string())
     }
 }
 
@@ -2740,6 +4663,7 @@ fn handle_callback_file_stream(
     let mut chunk = vec![0u8; 64 * 1024];
     while read_bytes < segment_bytes {
         let need = ((segment_bytes - read_bytes) as usize).min(chunk.len());
+        let at_segment_start = read_bytes == 0;
         if read_full(conn, &mut chunk[..need]).is_err() {
             return;
         }
@@ -2748,7 +4672,10 @@ fn handle_callback_file_stream(
         let cumulative_received = already_saved_bytes + read_bytes;
         let cumulative_total = already_saved_bytes + segment_bytes;
         let now = Instant::now();
-        if now.duration_since(last_report) >= Duration::from_secs(3) {
+        // 本段首次读到数据立刻回传 PROGRESS，之后每 1 秒一次，便于发送端气泡持续刷新平均速率。
+        let first_byte_report = at_segment_start;
+        let periodic_report = now.duration_since(last_report) >= Duration::from_secs(1);
+        if first_byte_report || periodic_report {
             let _ = inbound_tx.send(InboundUiEvent::PeerFileProgress {
                 session_id,
                 name: safe_for_signal.clone(),
