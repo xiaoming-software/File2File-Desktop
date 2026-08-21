@@ -1,0 +1,14 @@
+{
+  "identifier": "screenshot-overlay",
+  "description": "Screenshot overlay window permissions",
+  "windows": ["screenshot-*"],
+  "webviews": ["screenshot-*"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-set-focus",
+    "core:window:allow-show",
+    "core:event:default",
+    "allow-screenshot"
+  ]
+}

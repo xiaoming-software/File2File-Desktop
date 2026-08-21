@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>File2File</title>
+  <link rel="stylesheet" href="css/app.css" />
+</head>
+<body>
+  <div class="desktop">
+    <div class="app-window" id="app" role="application" aria-label="File2File">
+      <header class="titlebar" data-tauri-drag-region>
+        <div class="titlebar-left">
+          <div class="traffic-lights" aria-hidden="true">
+            <button class="tl tl-close" type="button" tabindex="-1"></button>
+            <button class="tl tl-min" type="button" tabindex="-1"></button>
+            <button class="tl tl-max" type="button" tabindex="-1"></button>
+          </div>
+          <div class="titlebar-brand">
+            <span class="app-mark" aria-hidden="true"></span>
+            <span class="titlebar-name">File2File</span>
+          </div>
+        </div>
+        <div class="titlebar-win-controls" aria-hidden="true">
+          <button class="win-btn" type="button" tabindex="-1">─</button>
+          <button class="win-btn" type="button" tabindex="-1">□</button>
+          <button class="win-btn win-btn-close" type="button" tabindex="-1">×</button>
+        </div>
+      </header>
+
+      <main class="app-body">
+        <section class="page page-login is-active" id="page-login" aria-label="登录">
+          <aside class="brand-pane">
+            <div class="brand-pane-inner">
+              <img
+                class="brand-logo"
+                src="assets/file2file_logo.png"
+                alt="File2File"
+              />
+              <p class="brand-tagline">File2File p2p文件传输工具</p>
+              <p class="brand-desc">使用 webrpc Token 登录后，即可管理会话并与对端安全传输文件。</p>
+              <ul class="brand-points">
+                <li>点对点直连，无需公网 IP</li>
+                <li>传输通道默认加密</li>
+                <li>适合跨设备、跨网络传文件</li>
+              </ul>
+              <p class="brand-slogan">专为大文件而生</p>
+            </div>
+          </aside>
+
+          <div class="form-pane">
+            <div class="form-pane-inner">
+              <h1 class="form-title">登录</h1>
+              <p class="form-subtitle">请输入 Token 与密码以连接 webrpc 网络</p>
+
+              <form id="login-form" autocomplete="off" novalidate>
+                <div class="field token-field">
+                  <label for="token">Token</label>
+                  <div class="input-wrap">
+                    <input
+                      id="token"
+                      name="token"
+                      type="text"
+                      spellcheck="false"
+                      placeholder="请输入 Token"
+                      maxlength="256"
+                      autocomplete="off"
+                    />
+                    <button
+                      class="ghost-btn"
+                      type="button"
+                      id="token-cache-btn"
+                      aria-label="选择已保存的 Token"
+                      aria-haspopup="listbox"
+                      aria-expanded="false"
+                    >
+                      选择
+                    </button>
+                  </div>
+                  <div class="token-dropdown" id="token-dropdown" hidden>
+                    <ul class="token-dropdown-list" id="token-dropdown-list" role="listbox"></ul>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <label for="password">密码</label>
+                  <div class="input-wrap">
+                    <input
+                      id="password"
+                      name="password"
+                      type="password"
+                      placeholder="请输入密码"
+                      maxlength="128"
+                    />
+                    <button
+                      class="ghost-btn"
+                      type="button"
+                      id="toggle-password"
+                      aria-label="显示密码"
+                    >
+                      显示
+                    </button>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <label for="passphrase">认证口令</label>
+                  <div class="input-wrap">
+                    <input
+                      id="passphrase"
+                      name="passphrase"
+                      type="password"
+                      placeholder="请输入认证口令（可留空）"
+                      maxlength="128"
+                    />
+                    <button
+                      class="ghost-btn"
+                      type="button"
+                      id="toggle-passphrase"
+                      aria-label="显示认证口令"
+                    >
+                      显示
+                    </button>
+                  </div>
+                </div>
+
+                <label class="check-row" for="save-token">
+                  <input id="save-token" type="checkbox" />
+                  <span class="check-box" aria-hidden="true"></span>
+                  <span>保存 Token</span>
+                </label>
+
+                <button class="btn-login" id="btn-login" type="submit">登录</button>
+
+                <p class="token-hint">
+                  点击
+                  <a href="https://webrpc.cn" target="_blank" rel="noopener noreferrer">https://webrpc.cn</a>
+                  获取 token
+                </p>
+
+                <p class="login-error" id="login-error" hidden>
+                  登陆失败,请检查网络或者token与密码是否正确
+                </p>
+              </form>
+            </div>
+          </div>
+        </section>
+
+        <section class="page page-sessions" id="page-sessions" aria-label="会话管理" hidden>
+          <header class="account-bar">
+            <div class="account-item">
+              <span class="account-label">Token</span>
+              <span class="account-value" id="info-token" title="">—</span>
+            </div>
+            <div class="account-item">
+              <span class="account-label">口令</span>
+              <span class="account-value" id="info-passphrase">未设置</span>
+            </div>
+            <div class="account-item">
+              <span class="account-label">登录时间</span>
+              <span class="account-value" id="info-login-time">—</span>
+            </div>
+            <div class="account-item">
+              <span class="account-label">登录状态</span>
+              <span class="account-value account-status">
+                <i class="status-dot is-on" aria-hidden="true"></i>
+                <span id="info-login-status">已登录</span>
+              </span>
+            </div>
+            <div class="account-item">
+              <span class="account-label">当前连接会话</span>
+              <span class="account-value" id="info-session-count">0</span>
+            </div>
+            <button class="btn-logout" id="btn-logout" type="button">退出登录</button>
+          </header>
+
+          <div class="workspace">
+            <aside class="session-pane">
+              <div class="session-pane-head">
+                <h2>会话</h2>
+                <button class="btn-new-session" id="btn-new-session" type="button">新建会话</button>
+              </div>
+              <div class="session-list" id="session-list"></div>
+            </aside>
+
+            <section class="chat-pane" id="chat-pane">
+              <div class="chat-panel" id="panel-unselected">
+                <div class="sessions-empty-icon" aria-hidden="true"></div>
+                <h2>未选择会话</h2>
+                <p>在左侧选择一个会话，或点击「新建会话」连接对端。</p>
+              </div>
+
+              <div class="chat-panel connect-panel" id="panel-connect">
+                <div class="connect-card">
+                  <div class="connect-mark" aria-hidden="true"></div>
+                  <h2>请先建立 P2P 连接</h2>
+                  <p class="connect-desc">当前会话尚未与对端连通，连接成功后即可收发消息和文件。</p>
+                  <p class="connect-peer" id="connect-peer"></p>
+                  <label class="field connect-pass-field" for="connect-peer-pass">
+                    <span>认证口令</span>
+                    <div class="input-wrap">
+                      <input
+                        id="connect-peer-pass"
+                        type="password"
+                        maxlength="128"
+                        placeholder="可留空，可修改"
+                        autocomplete="off"
+                      />
+                      <button
+                        class="ghost-btn"
+                        type="button"
+                        id="toggle-connect-pass"
+                        aria-label="显示认证口令"
+                      >
+                        显示
+                      </button>
+                    </div>
+                  </label>
+                  <button class="btn-primary btn-connect" id="btn-connect" type="button">连接</button>
+                  <p class="connect-error" id="connect-error" hidden>
+                    连接失败。请确认对方 Token 是否在线，以及当前网络是否可达。
+                  </p>
+                </div>
+              </div>
+
+              <div class="chat-panel chat-main" id="chat-main">
+                <header class="chat-head">
+                  <div class="chat-head-main">
+                    <i class="status-dot" id="chat-status-dot" aria-hidden="true"></i>
+                    <div class="chat-head-text">
+                      <h2 id="chat-title">—</h2>
+                      <p id="chat-subtitle">—</p>
+                    </div>
+                  </div>
+                  <span class="chat-conn-label" id="chat-conn-label">未连接</span>
+                </header>
+
+                <div class="chat-log" id="chat-log"></div>
+
+                <form class="composer" id="composer">
+                  <div class="pending-file" id="pending-file">
+                    <span id="pending-file-name"></span>
+                    <button type="button" id="pending-file-clear" aria-label="移除文件">×</button>
+                  </div>
+                  <div class="composer-row">
+                    <textarea
+                      id="composer-input"
+                      rows="1"
+                      placeholder="输入消息，Enter 发送，Shift+Enter 换行"
+                    ></textarea>
+                    <input id="file-input" type="file" hidden />
+                    <button class="btn-voice" id="btn-voice" type="button" title="语音通话">语音</button>
+                    <div class="shot-split" id="shot-split">
+                      <button class="btn-shot" id="btn-shot" type="button" title="截图 (⌃⌘A)">截图</button>
+                      <button
+                        class="btn-shot-caret"
+                        id="btn-shot-caret"
+                        type="button"
+                        title="更多截图选项"
+                        aria-label="更多截图选项"
+                        aria-haspopup="menu"
+                        aria-expanded="false"
+                      ></button>
+                      <div class="shot-menu" id="shot-menu" hidden role="menu">
+                        <button type="button" role="menuitem" data-shot-hide>
+                          隐藏当前窗口后截图
+                        </button>
+                      </div>
+                    </div>
+                    <button class="btn-file" id="btn-file" type="button">选择文件</button>
+                    <button class="btn-send" id="btn-send" type="submit">发送</button>
+                  </div>
+                </form>
+                <div class="chat-drop-mask" id="chat-drop-mask" hidden>
+                  <div class="chat-drop-card">松开即可发送文件</div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </section>
+      </main>
+
+      <div class="modal-root" id="modal-root" hidden>
+        <div class="modal-backdrop" data-close-modal></div>
+        <div class="modal" id="modal-new-session" hidden>
+          <h3>新建会话</h3>
+          <p class="modal-desc">输入对方 Token 添加到会话列表。认证口令可留空，连接时仍可修改。</p>
+          <label class="field">
+            <span>对方 Token</span>
+            <input id="new-peer-token" type="text" spellcheck="false" placeholder="请输入对方 Token" />
+          </label>
+          <label class="field">
+            <span>认证口令</span>
+            <input id="new-peer-pass" type="text" placeholder="可留空" />
+          </label>
+          <p class="modal-error" id="new-session-error" hidden>请输入对方 Token</p>
+          <div class="modal-actions">
+            <button type="button" class="btn-ghost" data-close-modal>取消</button>
+            <button type="button" class="btn-primary" id="btn-create-session">添加</button>
+          </div>
+        </div>
+        <div class="modal" id="modal-remark" hidden>
+          <h3>设置备注</h3>
+          <label class="field">
+            <span>备注名称</span>
+            <input id="remark-input" type="text" maxlength="40" placeholder="例如：办公室 NAS" />
+          </label>
+          <div class="modal-actions">
+            <button type="button" class="btn-ghost" data-close-modal>取消</button>
+            <button type="button" class="btn-primary" id="btn-save-remark">保存</button>
+          </div>
+        </div>
+        <div class="modal" id="modal-confirm" hidden>
+          <h3 id="confirm-title">删除会话</h3>
+          <p class="modal-desc" id="confirm-desc">删除后将从列表和本地缓存中移除。</p>
+          <div class="modal-actions">
+            <button type="button" class="btn-ghost" id="btn-confirm-cancel" data-close-modal>取消</button>
+            <button type="button" class="btn-danger" id="btn-confirm-ok">删除</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="bubble-menu" id="bubble-menu" hidden>
+    <button type="button" data-bubble-action="delete">删除</button>
+  </div>
+  <div class="media-overlay" id="media-overlay" hidden>
+    <div class="media-overlay-backdrop" data-close-media></div>
+    <div class="media-overlay-panel">
+      <button type="button" class="media-overlay-close" data-close-media aria-label="关闭">×</button>
+      <img class="media-overlay-image" id="media-overlay-image" alt="" hidden />
+      <video class="media-overlay-video" id="media-overlay-video" controls hidden></video>
+    </div>
+  </div>
+  <div class="voice-root" id="voice-root" hidden>
+    <div class="voice-backdrop"></div>
+    <div class="voice-card">
+      <div class="voice-mark" aria-hidden="true"></div>
+      <h3 id="voice-title">语音通话</h3>
+      <p id="voice-sub">—</p>
+      <p class="voice-timer" id="voice-timer" hidden>00:00</p>
+      <div class="voice-actions">
+        <button type="button" class="voice-btn is-mute" id="voice-mute" hidden>静音</button>
+        <button type="button" class="voice-btn is-cancel" id="voice-cancel">取消</button>
+        <button type="button" class="voice-btn is-reject" id="voice-reject" hidden>拒绝</button>
+        <button type="button" class="voice-btn is-accept" id="voice-accept" hidden>接听</button>
+        <button type="button" class="voice-btn is-hangup" id="voice-hangup" hidden>挂断</button>
+      </div>
+    </div>
+  </div>
+  <script src="js/app.js"></script>
+</body>
+</html>

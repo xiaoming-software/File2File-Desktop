@@ -1,0 +1,67 @@
+ARG BASE_IMAGE=golang:1.25-bookworm
+FROM ${BASE_IMAGE}
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    CARGO_TERM_COLOR=always \
+    CARGO_HOME=/root/.cargo \
+    RUSTUP_HOME=/root/.rustup \
+    RUSTUP_DIST_SERVER=https://rsproxy.cn \
+    RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup \
+    XWIN_CACHE_DIR=/xwin-cache \
+    PATH="/root/.cargo/bin:${PATH}"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        clang \
+        cmake \
+        curl \
+        file \
+        git \
+        libssl-dev \
+        lld \
+        llvm \
+        nsis \
+        pkg-config \
+        wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://rsproxy.cn/rustup-init.sh | sh -s -- -y --default-toolchain stable
+
+RUN mkdir -p /root/.cargo \
+    && printf '%s\n' \
+        '[source.crates-io]' \
+        'replace-with = "rsproxy-sparse"' \
+        '[source.rsproxy]' \
+        'registry = "https://rsproxy.cn/crates.io-index"' \
+        '[source.rsproxy-sparse]' \
+        'registry = "sparse+https://rsproxy.cn/index/"' \
+        > /root/.cargo/config.toml \
+    && rustup target add x86_64-pc-windows-msvc \
+    && cargo install tauri-cli --locked --version "^2" \
+    && cargo install cargo-xwin --locked
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc-mingw-w64-x86-64 \
+    && rm -rf /var/lib/apt/lists/* \
+    && rustup target add x86_64-pc-windows-gnu \
+    && printf '\n%s\n' \
+        '[target.x86_64-pc-windows-gnu]' \
+        'linker = "x86_64-w64-mingw32-gcc"' \
+        >> /root/.cargo/config.toml
+
+# 覆盖写入 cargo 配置：静态链 MinGW 运行库，exe 不依赖 libgcc / pthread dll
+RUN printf '%s\n' \
+        '[source.crates-io]' \
+        'replace-with = "rsproxy-sparse"' \
+        '[source.rsproxy]' \
+        'registry = "https://rsproxy.cn/crates.io-index"' \
+        '[source.rsproxy-sparse]' \
+        'registry = "sparse+https://rsproxy.cn/index/"' \
+        '' \
+        '[target.x86_64-pc-windows-gnu]' \
+        'linker = "x86_64-w64-mingw32-gcc"' \
+        'rustflags = ["-C","target-feature=+crt-static","-C","link-arg=-static-libgcc"]' \
+        > /root/.cargo/config.toml
+
+WORKDIR /work

@@ -1,218 +1,194 @@
-# File2File Desktop
+<p align="center">
+  <img src="ui/assets/file2file_logo.png" width="96" alt="File2File">
+</p>
 
-[![Rust](https://img.shields.io/badge/Rust-Desktop_App-orange?logo=rust)](https://www.rust-lang.org/)
-[![WebRPC](https://img.shields.io/badge/WebRPC-P2P_Transport-2d7ff9)](https://webrpc.cn)
-[![Open Source](https://img.shields.io/badge/Project-Free_%26_Open_Source-brightgreen)](#中文--chinese)
+<h1 align="center">File2File</h1>
 
-[中文](#中文--chinese) | [English](#english)
+<p align="center">
+  <strong>专为大文件而生的 P2P 传输桌面客户端</strong><br>
+  点对点直连 · 默认加密 · 免费使用 · 跨平台
+</p>
 
----
+<p align="center">
+  <a href="README.md">简体中文</a> ·
+  <a href="README.en.md">English</a>
+</p>
 
-## 中文 / Chinese
-
-### 项目介绍
-
-File2File 是一款专门用于文件点对点传输（P2P）的桌面软件，底层采用专业的 WebRPC P2P 通信组件。  
-项目定位为**完全免费、开源**，目标是提供简单可靠、可持续扩展的文件传输体验。  
-当前版本重点支持 **Windows、Linux ARM、Linux x86、macOS** 多平台部署，连接成功率可达 **99.9%**。
-**握手过程可在 200ms 内完成，并支持大文件高速传输，带来极致高效的点对点交流体验。**
-
-### 软件截图
-
-![File2File Workspace](assets/file2file_workspace.png)
-
-### 核心能力
-
-- 基于 Rust + `eframe/egui` 构建桌面客户端。
-- 基于 WebRPC 进行点对点会话连接。
-- 支持文本消息与文件传输。
-- 支持会话管理与本地状态持久化。
-- 支持接收文件本地存储与快速打开。
-
-### 连接机制（Token + 口令）
-
-- 登录连接依赖 WebRPC `token` 与可选口令。
-- 当口令为空时：任何知道你 `token` 的用户都可以连接到你的会话。
-- 当设置口令时：对方必须同时提供正确的 `token` 和口令才能建立连接。
-- 若你尚未拥有 WebRPC `token`，请前往 [https://webrpc.cn](https://webrpc.cn) 申请。
-
-### 快速开始
-
-#### 环境要求
-
-- Rust（建议使用稳定版）
-- Cargo
-
-#### 运行
-
-```bash
-cargo run
-```
-
-#### 快速编译（多平台可执行程序）
-
-当需要快速编译所有平台可执行程序时，请执行：
-
-```bash
-./build.sh
-```
-
-构建完成后，产物通常输出到 `dist/` 目录（以脚本实际配置为准）。
-
-常见失败排查：
-
-- 提示 `Permission denied`：先执行 `chmod +x build.sh` 再重新运行。
-- 提示依赖缺失：请先安装 Rust/Cargo 及脚本依赖工具链。
-- 构建中断时：优先查看终端日志，定位具体平台或步骤失败原因。
-
-### 使用说明
-
-1. 启动客户端，输入你的 WebRPC `token`。
-2. 根据安全需求选择是否设置连接口令（推荐设置）。
-3. 将你的 `token`（及口令，如已启用）分享给对方。
-4. 对方输入正确凭据后建立会话。
-5. 在会话中发送文本消息或文件，接收文件将保存到本地目录。
-
-### 本地数据目录
-
-- 首次启动会在本地创建应用状态目录（用于保存会话与状态信息）。
-- 接收文件保存在本地接收目录，便于后续查看和管理。
-
-### 常见问题（FAQ）
-
-**1) 为什么建议设置口令？**  
-未设置口令时，只要对方知道你的 `token` 即可发起连接；启用口令可显著提升会话安全性。
-
-**2) 口令忘记了怎么办？**  
-直接在本端重新设置新口令，并将新凭据同步给可信对端。
-
-**3) Token 从哪里获取？**  
-从 WebRPC 官方站点申请：[https://webrpc.cn](https://webrpc.cn)。
-
-### Roadmap
-
-- [ ] 对接完整的在线鉴权与会话服务。
-- [ ] 增强传输状态展示（进度、成功/失败重试）。
-- [ ] 支持大文件断点续传。
-- [ ] 完善多平台打包与自动发布流程。
-- [ ] 补充更完整的自动化测试。
-
-### 参与贡献
-
-欢迎 Issue 与 PR。建议流程：
-
-1. Fork 本仓库并创建功能分支。
-2. 完成开发与自测。
-3. 提交清晰的 Commit 信息。
-4. 发起 Pull Request，描述改动动机与验证方式。
-
-### 许可证
-
-本项目采用 **Apache License 2.0** 开源协议。  
-完整许可证内容请见仓库根目录 `LICENSE` 文件。
+<p align="center">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-1d4ed8" alt="Platform">
+  <img src="https://img.shields.io/badge/P2P-webrpc-0ea5e9" alt="webrpc">
+  <img src="https://img.shields.io/badge/Tauri-2-24c8db" alt="Tauri">
+  <img src="https://img.shields.io/badge/version-0.1.0-64748b" alt="Version">
+</p>
 
 ---
 
-## English
+## 简介
 
-### Overview
+**File2File** 是一款基于 [webrpc](https://webrpc.cn) 的桌面端点对点传输工具。用 Token 登录后，即可与对端建立直连会话：发消息、传文件、截图、语音通话，全程走加密通道，**不需要公网 IP，也不依赖中心化网盘**。
 
-File2File is a desktop application dedicated to peer-to-peer (P2P) file transfer, powered by a professional WebRPC P2P communication component.  
-The project is **free and open source**, aiming to provide a reliable and extensible transfer experience.  
-The current release emphasizes cross-platform support for **Windows, Linux ARM, Linux x86, and macOS**, with a connection success rate of up to **99.9%**.
-The **handshake process can complete within 200ms** and supports **high-speed large-file transfer**, delivering an extremely efficient peer-to-peer communication experience.
+它不是又一个网盘客户端。文件从你的设备直接送到对方设备，通道默认加密，体积从截图到数 GB 镜像都能传。适合跨设备、跨网络、跨系统交换大文件。
 
-### Screenshot
+---
 
-![File2File Workspace](assets/file2file_workspace.png)
+## 界面预览
 
-### Key Features
+<p align="center">
+  <img src="assets/loginp.png" alt="登录界面" width="880">
+</p>
+<p align="center"><em>登录：使用 webrpc Token 接入网络</em></p>
 
-- Desktop client built with Rust + `eframe/egui`.
-- P2P session connectivity based on WebRPC.
-- Text messaging and file transfer.
-- Session management with local persistence.
-- Local storage and quick access for received files.
+<p align="center">
+  <img src="assets/sms.png" alt="聊天与文件传输" width="880">
+</p>
+<p align="center"><em>会话：文字、截图与大文件在同一条加密通道里传输（示例：2.76 GB，平均 3.93 MB/s）</em></p>
 
-### Connection Model (Token + Passphrase)
+<p align="center">
+  <img src="assets/yuying.png" alt="语音通话" width="880">
+</p>
+<p align="center"><em>语音：来电弹窗，一键接听或拒绝</em></p>
 
-- Login/session connection is based on WebRPC `token` with an optional passphrase.
-- If passphrase is empty: anyone who knows your `token` can connect.
-- If passphrase is enabled: peers must provide both valid `token` and passphrase.
-- If you do not have a WebRPC `token` yet, apply at [https://webrpc.cn](https://webrpc.cn).
+---
 
-### Quick Start
+## 为什么选 File2File
 
-#### Requirements
+| 亮点 | 说明 |
+| --- | --- |
+| **P2P 直连** | 两端打通后直传，无需公网 IP，也不必把文件先上传到云端。 |
+| **默认加密** | 传输通道默认加密，Token + 可选认证口令，适合敏感文件。 |
+| **完全免费** | 客户端免费，不向用户收取传输费用。 |
+| **多平台** | macOS、Windows、Linux（x86_64 / ARM64）同一套体验。 |
+| **聊天 + 传文件** | 会话里既能发消息，也能发截图和任意文件，进度、耗时、均速一目了然。 |
+| **为大文件而生** | 针对大体积传输设计，GB 级镜像、安装包、素材包都能稳定送完。 |
+| **语音通话** | 已连接的会话可直接发起语音，回声消除，接听 / 拒绝 / 静音。 |
 
-- Rust (stable channel recommended)
-- Cargo
+---
 
-#### Run
+## 功能一览
+
+- **会话管理**：新建会话、备注、历史记录本地保存，下次登录可继续。
+- **即时消息**：Enter 发送，Shift+Enter 换行。
+- **文件传输**：选择文件或拖拽到窗口即可发送；接收进度实时显示。
+- **截图发送**：框选屏幕后直接发到当前会话；可选择先隐藏本窗口再截。
+- **语音通话**：邀请、接听、拒绝、挂断、静音。
+- **账号缓存**：可选保存 Token，下次一键填入。
+
+---
+
+## 如何使用
+
+两端都需要安装 File2File，并各自拥有 [webrpc.cn](https://webrpc.cn) 的 Token。
+
+### 1. 获取 Token
+
+打开 [https://webrpc.cn](https://webrpc.cn) 注册并获取 Token 与密码。
+
+### 2. 登录
+
+1. 启动 File2File。
+2. 填写 **Token** 和 **密码**。
+3. **认证口令**可选：双方约定同一口令后，只有知道口令的对端才能连上你。
+4. 需要下次免填时勾选 **保存 Token**，然后点 **登录**。
+
+登录成功后，顶栏会显示 Token、口令、登录时间和当前连接会话数。
+
+### 3. 新建并连接会话
+
+1. 左侧点 **新建会话**，填入对方的 Token（以及对方的认证口令，若对方设置了）。
+2. 选中该会话，点 **连接**，等待状态变为 **已连接**。
+3. 对方也需要在线；连接失败时请确认对方 Token 是否在线、网络是否可达。
+
+### 4. 发消息、传文件
+
+连接成功后即可使用底部输入栏：
+
+| 操作 | 做法 |
+| --- | --- |
+| 发文字 | 输入后按 Enter |
+| 发文件 | 点 **选择文件**，或把文件拖进窗口 |
+| 发截图 | 点 **截图**（macOS 快捷键 `⌃⌘A`），可选「隐藏当前窗口后截图」 |
+| 语音通话 | 点 **语音**，对方弹出接听 / 拒绝 |
+
+传输卡片会显示已传大小、耗时和平均速度。收到的图片可直接预览。
+
+### 5. 退出
+
+右上角 **退出登录** 会断开当前会话并回到登录页。本地会话记录仍会保留。
+
+---
+
+## 平台与安装
+
+| 平台 | 产物 | 说明 |
+| --- | --- | --- |
+| macOS 11+ | `File2File.app` | 本机编译 |
+| Windows x64 | `File2File.exe` | 需系统已安装 WebView2（Win10/11 通常自带） |
+| Linux amd64 | `.deb` | Debian / Ubuntu 等 |
+| Linux arm64 | `.deb` | 如 Apple Silicon 上的 Linux、树莓派 64 位 |
+
+预编译包位于 `dist-tauri/`（自行构建后生成）。
+
+---
+
+## 从源码构建
+
+环境：Rust（含 `cargo`）、[Tauri CLI 2](https://v2.tauri.app/)。macOS 还需 Xcode Command Line Tools。跨平台打包需要 Docker。
 
 ```bash
-cargo run
+# 仅编译当前平台
+./build-tauri.sh
+
+# 全平台：本机编 macOS，Docker 编 Linux / Windows
+./build-all.sh
+
+# 只编某一个目标
+./build-all.sh macos
+./build-all.sh linux-arm64
+./build-all.sh linux-amd64
+./build-all.sh windows
 ```
 
-#### Fast Build (All Platform Executables)
+产物目录：`dist-tauri/`。
 
-To quickly build executables for all supported platforms, run:
+```text
+dist-tauri/
+├── macos/File2File.app
+├── linux-amd64/*.deb
+├── linux-arm64/*.deb
+└── windows-x64/File2File.exe
+```
+
+开发调试：
 
 ```bash
-./build.sh
+cd src-tauri
+cargo tauri dev
 ```
 
-Build artifacts are typically generated in the `dist/` directory (subject to script configuration).
+---
 
-Common troubleshooting tips:
+## 后续规划
 
-- `Permission denied`: run `chmod +x build.sh` and retry.
-- Missing dependencies: ensure Rust/Cargo and required toolchains are installed.
-- Interrupted build: inspect terminal logs to identify the failing platform or step.
+- 聊天实时翻译
+- 视频通话
+- 更多会话与传输体验优化
 
-### Usage
+---
 
-1. Launch the app and enter your WebRPC `token`.
-2. Decide whether to set a session passphrase (recommended).
-3. Share your `token` (and passphrase if enabled) with your peer.
-4. Establish a session after credential verification.
-5. Start sending messages/files; received files are saved locally.
+## 技术栈
 
-### Local Data
+| 层 | 技术 |
+| --- | --- |
+| 桌面壳 | [Tauri 2](https://v2.tauri.app/)（Rust） |
+| 界面 | HTML / CSS / JavaScript |
+| P2P 通道 | [webrpc](https://webrpc.cn) SDK |
+| 语音 | cpal 采集播放 + AEC3 回声消除 |
 
-- A local app-state directory is created on first launch.
-- Received files are stored in a local receiving directory for easy access.
+---
 
-### FAQ
+## 相关链接
 
-**1) Why should I enable a passphrase?**  
-Without a passphrase, anyone with your `token` can attempt a session connection. A passphrase improves access control.
+- 获取 Token：[https://webrpc.cn](https://webrpc.cn)
+- 问题与建议：欢迎在本仓库提交 Issue
 
-**2) What if I forget the passphrase?**  
-Reset it on your side and share the new credentials only with trusted peers.
-
-**3) Where can I get a token?**  
-Apply from the official WebRPC portal: [https://webrpc.cn](https://webrpc.cn).
-
-### Roadmap
-
-- [ ] Integrate full online auth and session services.
-- [ ] Improve transfer status UX (progress, retry, failures).
-- [ ] Add resumable transfer for large files.
-- [ ] Improve multi-platform packaging and release automation.
-- [ ] Expand automated test coverage.
-
-### Contributing
-
-Issues and PRs are welcome. Suggested workflow:
-
-1. Fork the repository and create a feature branch.
-2. Implement changes and run local verification.
-3. Use clear commit messages.
-4. Open a Pull Request with motivation and test notes.
-
-### License
-
-This project is licensed under the **Apache License 2.0**.  
-See the `LICENSE` file in the repository root for the full license text.
-
+> File2File 只做直连传输，不托管你的文件。请自行保管 Token 与口令，不要分享给不可信的人。

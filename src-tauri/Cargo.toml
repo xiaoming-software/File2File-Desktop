@@ -1,0 +1,23 @@
+[package]
+name = "file2file-tauri"
+version = "0.1.0"
+description = "File2File desktop (Tauri)"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api", "protocol-asset"] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+xcap = "0.5"
+image = { version = "0.25", default-features = false, features = ["png"] }
+cpal = "0.15"
+base64 = "0.22"
+aec3 = "0.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"

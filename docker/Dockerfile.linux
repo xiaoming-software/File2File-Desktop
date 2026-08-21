@@ -1,0 +1,58 @@
+ARG BASE_IMAGE=golang:1.25-bookworm
+FROM ${BASE_IMAGE}
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    CARGO_TERM_COLOR=always \
+    CARGO_HOME=/root/.cargo \
+    RUSTUP_HOME=/root/.rustup \
+    RUSTUP_DIST_SERVER=https://rsproxy.cn \
+    RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup \
+    PATH="/root/.cargo/bin:${PATH}"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        clang \
+        cmake \
+        curl \
+        file \
+        git \
+        libasound2-dev \
+        libayatana-appindicator3-dev \
+        libclang-dev \
+        libdbus-1-dev \
+        libgtk-3-dev \
+        libpipewire-0.3-dev \
+        librsvg2-dev \
+        libssl-dev \
+        libwebkit2gtk-4.1-dev \
+        libx11-dev \
+        libxcb1-dev \
+        libxdo-dev \
+        libxrandr-dev \
+        pkg-config \
+        patchelf \
+        wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://rsproxy.cn/rustup-init.sh | sh -s -- -y --default-toolchain stable
+
+RUN mkdir -p /root/.cargo \
+    && printf '%s\n' \
+        '[source.crates-io]' \
+        'replace-with = "rsproxy-sparse"' \
+        '[source.rsproxy]' \
+        'registry = "https://rsproxy.cn/crates.io-index"' \
+        '[source.rsproxy-sparse]' \
+        'registry = "sparse+https://rsproxy.cn/index/"' \
+        > /root/.cargo/config.toml \
+    && cargo install tauri-cli --locked --version "^2"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libegl1-mesa-dev \
+        libgbm-dev \
+        libgl1-mesa-dev \
+        libwayland-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work

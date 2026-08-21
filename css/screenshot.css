@@ -1,0 +1,237 @@
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  user-select: none;
+  cursor: crosshair;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+}
+
+#stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+#bg,
+#overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+#bg {
+  object-fit: fill;
+  pointer-events: none;
+}
+
+#hint {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  padding: 6px 12px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+
+#hint.is-hide {
+  display: none;
+}
+
+#size-tip {
+  position: absolute;
+  z-index: 5;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: 12px;
+  line-height: 18px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+#magnifier {
+  position: absolute;
+  z-index: 6;
+  width: 110px;
+  pointer-events: none;
+  background: #111;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+#mag-canvas {
+  display: block;
+  width: 110px;
+  height: 80px;
+  image-rendering: pixelated;
+}
+
+#mag-meta {
+  padding: 3px 6px 4px;
+  color: #fff;
+  font-size: 11px;
+  line-height: 16px;
+  background: #1a1a1a;
+}
+
+#toolbar {
+  position: absolute;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+#style-bar,
+.tool-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 6px;
+  background: #2b2b2b;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+.tool-row button,
+.swatch-size,
+.swatch-color {
+  width: 32px;
+  height: 28px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #f2f2f2;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tool-row button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.tool-row button:hover,
+.swatch-size:hover,
+.swatch-color:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.tool-row button.is-on {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.tool-row button.is-ok {
+  color: #07c160;
+}
+
+.tool-row button.is-ok:hover {
+  background: rgba(7, 193, 96, 0.16);
+}
+
+.shot-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.swatch-size {
+  position: relative;
+}
+
+.swatch-size::after {
+  content: "";
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #fff;
+}
+
+.swatch-size[data-width="4"]::after {
+  width: 7px;
+  height: 7px;
+}
+
+.swatch-size[data-width="8"]::after {
+  width: 10px;
+  height: 10px;
+}
+
+.swatch-size.is-on,
+.swatch-color.is-on {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.swatch-color {
+  width: 22px;
+}
+
+.swatch-color::after {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--c);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+#text-editor {
+  position: absolute;
+  z-index: 8;
+  min-width: 80px;
+  min-height: 28px;
+  margin: 0;
+  padding: 4px 6px;
+  border: 1px dashed currentColor;
+  background: transparent;
+  outline: none;
+  resize: both;
+  font-size: 18px;
+  line-height: 1.35;
+  color: #f45454;
+}
+
+body.is-move {
+  cursor: move;
+}
+
+body.is-nwse {
+  cursor: nwse-resize;
+}
+
+body.is-nesw {
+  cursor: nesw-resize;
+}
+
+body.is-ew {
+  cursor: ew-resize;
+}
+
+body.is-ns {
+  cursor: ns-resize;
+}
+
+body.is-text {
+  cursor: text;
+}
+
+body.is-draw {
+  cursor: crosshair;
+}

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>截图</title>
+    <link rel="stylesheet" href="./css/screenshot.css" />
+  </head>
+  <body>
+    <div id="stage">
+      <img id="bg" alt="" draggable="false" />
+      <canvas id="overlay"></canvas>
+      <div id="hint">拖动鼠标选择区域 · Esc 取消</div>
+      <div id="size-tip" hidden>0 × 0</div>
+      <div id="magnifier" hidden>
+        <canvas id="mag-canvas" width="110" height="80"></canvas>
+        <div id="mag-meta">0, 0</div>
+      </div>
+      <textarea id="text-editor" hidden></textarea>
+      <div id="toolbar" hidden>
+        <div id="style-bar" hidden>
+          <button type="button" class="swatch-size is-on" data-width="2" title="细"></button>
+          <button type="button" class="swatch-size" data-width="4" title="中"></button>
+          <button type="button" class="swatch-size" data-width="8" title="粗"></button>
+          <span class="shot-sep"></span>
+          <button type="button" class="swatch-color is-on" data-color="#f45454" style="--c:#f45454"></button>
+          <button type="button" class="swatch-color" data-color="#f7b500" style="--c:#f7b500"></button>
+          <button type="button" class="swatch-color" data-color="#3ac26c" style="--c:#3ac26c"></button>
+          <button type="button" class="swatch-color" data-color="#3b82f6" style="--c:#3b82f6"></button>
+          <button type="button" class="swatch-color" data-color="#ffffff" style="--c:#ffffff"></button>
+          <button type="button" class="swatch-color" data-color="#1f1f1f" style="--c:#1f1f1f"></button>
+        </div>
+        <div class="tool-row">
+          <button type="button" data-tool="rect" title="矩形">
+            <svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+          </button>
+          <button type="button" data-tool="ellipse" title="椭圆">
+            <svg viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="8" ry="5.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+          </button>
+          <button type="button" data-tool="arrow" title="箭头">
+            <svg viewBox="0 0 24 24"><path d="M4 18 L16 8 M16 8 H10 M16 8 V14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button type="button" data-tool="pen" title="画笔">
+            <svg viewBox="0 0 24 24"><path d="M5 19l2-1 10-10 2 2-10 10-1 2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          </button>
+          <button type="button" data-tool="mosaic" title="马赛克">
+            <svg viewBox="0 0 24 24"><path fill="currentColor" d="M5 5h4v4H5zm5 0h4v4h-4zm5 0h4v4h-4zM5 10h4v4H5zm5 0h4v4h-4zm5 0h4v4h-4zM5 15h4v4H5zm5 0h4v4h-4zm5 0h4v4h-4z"/></svg>
+          </button>
+          <button type="button" data-tool="text" title="文字">
+            <svg viewBox="0 0 24 24"><path d="M5 6h14M12 6v13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+          <span class="shot-sep"></span>
+          <button type="button" data-act="undo" title="撤销">
+            <svg viewBox="0 0 24 24"><path d="M8 8H5v3M5.5 11A7 7 0 1 0 7 6.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+          <button type="button" data-act="cancel" title="取消">
+            <svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+          <button type="button" class="is-ok" data-act="ok" title="完成">
+            <svg viewBox="0 0 24 24"><path d="M6 12.5l4 4 8-9" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+    <script src="./js/screenshot.js"></script>
+  </body>
+</html>

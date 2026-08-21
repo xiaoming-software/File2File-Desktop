@@ -1,0 +1,17 @@
+[[permission]]
+identifier = "allow-webrpc"
+description = "Allow webrpc login, logout, open, send and close session"
+commands.allow = [
+  "webrpc_login",
+  "webrpc_logout",
+  "webrpc_open_session",
+  "webrpc_send_data",
+  "webrpc_send_file",
+  "webrpc_close_session",
+  "voice_invite",
+  "voice_accept",
+  "voice_reject",
+  "voice_hangup",
+  "voice_set_mute",
+  "voice_state",
+]

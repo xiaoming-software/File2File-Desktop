@@ -1,0 +1,27 @@
+{
+  "identifier": "default",
+  "description": "File2File main window permissions",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-minimize",
+    "core:window:allow-maximize",
+    "core:window:allow-unmaximize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-is-maximized",
+    "core:window:allow-set-size",
+    "core:window:allow-center",
+    "core:window:allow-start-dragging",
+    "core:event:default",
+    "opener:default",
+    "allow-webrpc",
+    "allow-saved-accounts",
+    "allow-saved-sessions",
+    "allow-saved-chats",
+    "allow-file-stat",
+    "allow-reveal-in-dir",
+    "allow-screenshot",
+    "dialog:default"
+  ]
+}

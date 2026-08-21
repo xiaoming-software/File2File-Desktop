@@ -1,0 +1,11 @@
+[[permission]]
+identifier = "allow-saved-chats"
+description = "Allow reading and writing saved chat messages"
+commands.allow = [
+  "saved_chats_load",
+  "saved_chats_append",
+  "saved_chats_update",
+  "saved_chats_clear",
+  "saved_chats_delete",
+  "saved_chats_delete_message",
+]

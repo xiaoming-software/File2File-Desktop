@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-file-stat"
+description = "Allow reading local file name and size"
+commands.allow = ["file_stat", "inspect_paths"]
+
+[[permission]]
+identifier = "allow-reveal-in-dir"
+description = "Allow revealing a local file in the system file manager"
+commands.allow = ["reveal_in_dir"]

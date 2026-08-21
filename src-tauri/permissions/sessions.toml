@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-saved-sessions"
+description = "Allow reading and writing saved sessions"
+commands.allow = [
+  "saved_sessions_list",
+  "saved_sessions_create",
+  "saved_sessions_update",
+  "saved_sessions_delete",
+]

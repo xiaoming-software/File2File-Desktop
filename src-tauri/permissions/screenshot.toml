@@ -1,0 +1,10 @@
+[[permission]]
+identifier = "allow-screenshot"
+description = "Allow WeChat-style screenshot overlay and saving"
+commands.allow = [
+  "screenshot_start",
+  "screenshot_overlay_info",
+  "screenshot_overlay_png",
+  "screenshot_finish",
+  "screenshot_cancel",
+]
