@@ -23,15 +23,29 @@ struct SavedSessionsFile {
 }
 
 fn sessions_path() -> Result<PathBuf, String> {
+    Ok(storage::app_data_subdir("sessions")?.join(SESSIONS_FILE))
+}
+
+fn legacy_sessions_path() -> Result<PathBuf, String> {
     Ok(storage::app_data_dir()?.join(SESSIONS_FILE))
 }
 
 fn load_file() -> Result<SavedSessionsFile, String> {
     let path = sessions_path()?;
     if !path.exists() {
+        let legacy = legacy_sessions_path()?;
+        if legacy.exists() {
+            let data = load_from(&legacy)?;
+            save_file(&data)?;
+            return Ok(data);
+        }
         return Ok(SavedSessionsFile::default());
     }
-    let raw = fs::read_to_string(&path).map_err(|err| format!("读取会话缓存失败: {err}"))?;
+    load_from(&path)
+}
+
+fn load_from(path: &PathBuf) -> Result<SavedSessionsFile, String> {
+    let raw = fs::read_to_string(path).map_err(|err| format!("读取会话缓存失败: {err}"))?;
     if raw.trim().is_empty() {
         return Ok(SavedSessionsFile::default());
     }

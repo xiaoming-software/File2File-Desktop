@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::ffi::{c_void, CStr, CString};
 use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
+use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
 use std::net::TcpStream;
 use std::os::raw::c_char;
@@ -99,7 +100,12 @@ unsafe extern "C" {
 }
 
 extern "C" fn atexit_free_webrpc() {
-    free_current();
+    let _ = panic::catch_unwind(AssertUnwindSafe(|| {
+        let handle = WEBRPC_HANDLE.swap(0, Ordering::SeqCst);
+        if handle != 0 {
+            unsafe { webrpc_free(handle) };
+        }
+    }));
 }
 
 extern "C" {
@@ -119,6 +125,8 @@ pub fn install_exit_hooks() {
 pub fn ensure_go_runtime() {
     static START: Once = Once::new();
     START.call_once(|| {
+        #[cfg(target_os = "windows")]
+        crate::win::silence_stdio();
         #[cfg(all(target_os = "windows", target_env = "msvc", target_arch = "x86_64"))]
         {
             unsafe extern "C" {
@@ -176,15 +184,28 @@ fn login_identity() -> (String, String) {
 }
 
 fn free_current() {
-    bump_callback_epoch();
-    stop_session_size_poller();
-    stop_all_session_monitors();
-    recycle_all_file_io();
-    crate::voice::shutdown();
-    clear_login_identity();
-    let handle = WEBRPC_HANDLE.swap(0, Ordering::SeqCst);
-    if handle != 0 {
-        unsafe { webrpc_free(handle) };
+    static FREEING: AtomicBool = AtomicBool::new(false);
+    if FREEING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        bump_callback_epoch();
+        stop_session_size_poller();
+        crate::nas::stop_all();
+        crate::tasks::interrupt_all();
+        stop_all_session_monitors();
+        recycle_all_file_io();
+        crate::voice::shutdown();
+        crate::desktop::shutdown();
+        clear_login_identity();
+        let handle = WEBRPC_HANDLE.swap(0, Ordering::SeqCst);
+        if handle != 0 {
+            unsafe { webrpc_free(handle) };
+        }
+    }));
+    FREEING.store(false, Ordering::SeqCst);
+    if result.is_err() {
+        eprintln!("webrpc: free_current panicked, ignored");
     }
 }
 
@@ -374,6 +395,9 @@ fn session_has_active_file(session_id: u32) -> bool {
     if sending {
         return true;
     }
+    if crate::tasks::is_session_busy(session_id) || crate::nas::recv_inflight(session_id) {
+        return true;
+    }
     recv_tasks()
         .lock()
         .map(|tasks| {
@@ -417,7 +441,10 @@ fn session_watch_loop(session_id: u32, epoch: u64) {
                 if let Some(app) = APP_HANDLE.get() {
                     let _ = app.emit("webrpc-session-dead", session_id);
                 }
+                crate::nas::stop_watch(session_id);
+                crate::tasks::on_session_dead(session_id);
                 crate::voice::on_session_dead(session_id);
+                crate::desktop::on_session_dead(session_id);
                 recycle_session_file_io(session_id);
                 return;
             }
@@ -550,8 +577,11 @@ pub async fn webrpc_close_session(
     }
     tauri::async_runtime::spawn_blocking(move || {
         stop_session_monitor(session_id);
+        crate::nas::stop_watch(session_id);
+        crate::tasks::on_session_dead(session_id);
         recycle_session_file_io(session_id);
         crate::voice::on_session_dead(session_id);
+        crate::desktop::on_session_dead(session_id);
         let handle = current_handle();
         if handle == 0 {
             return Ok(());
@@ -870,6 +900,18 @@ fn send_json_bytes_timeout(
     payload: &str,
     timeout_ms: i64,
 ) -> bool {
+    send_bytes_raw(handle, session_id, payload.as_bytes(), timeout_ms)
+}
+
+pub(crate) fn send_bytes_timeout(session_id: u32, payload: &[u8], timeout_ms: i64) -> bool {
+    let handle = current_handle();
+    if handle == 0 || session_id == 0 || payload.is_empty() {
+        return false;
+    }
+    send_bytes_raw(handle, session_id, payload, timeout_ms)
+}
+
+fn send_bytes_raw(handle: usize, session_id: u32, payload: &[u8], timeout_ms: i64) -> bool {
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         let _ = (handle, session_id, payload, timeout_ms);
@@ -877,16 +919,15 @@ fn send_json_bytes_timeout(
     }
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     {
-        let Ok(data_c) = CString::new(payload) else {
+        if payload.is_empty() || payload.len() > i32::MAX as usize {
             return false;
-        };
-        let data_len = data_c.as_bytes().len() as i32;
+        }
         let ret = unsafe {
             WebrpcClient_SendData(
                 handle,
                 session_id,
-                data_c.as_ptr() as *mut c_char,
-                data_len,
+                payload.as_ptr() as *mut c_char,
+                payload.len() as i32,
                 timeout_ms,
             )
         };
@@ -1103,6 +1144,14 @@ fn send_file_blocking(handle: usize, session_id: u32, path: &str) -> i32 {
     }
 }
 
+pub(crate) fn send_local_file(session_id: u32, path: &str) -> i32 {
+    let handle = current_handle();
+    if handle == 0 || session_id == 0 || path.trim().is_empty() {
+        return 0;
+    }
+    send_file_blocking(handle, session_id, path)
+}
+
 fn login_blocking(
     token: String,
     password: String,
@@ -1123,6 +1172,8 @@ fn login_blocking(
 
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     {
+        #[cfg(target_os = "windows")]
+        let _console_guard = crate::win::ConsoleGuard::start();
         ensure_go_runtime();
         let deadline = Instant::now() + LOGIN_TIMEOUT;
 
@@ -1136,6 +1187,8 @@ fn login_blocking(
         let _ = thread::Builder::new()
             .name("webrpc-new".into())
             .spawn(move || {
+                #[cfg(target_os = "windows")]
+                crate::win::silence_stdio();
                 let handle = unsafe {
                     WebrpcClient_New(
                         args_for_new.0.as_ptr() as *mut c_char,
@@ -1335,14 +1388,6 @@ fn read_data_stream(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
     Ok(buf)
 }
 
-#[derive(Deserialize)]
-struct InboundMessage {
-    #[serde(rename = "type")]
-    kind: i64,
-    #[serde(default)]
-    data: serde_json::Value,
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct InboundHello {
@@ -1360,17 +1405,52 @@ struct InboundText {
 }
 
 fn handle_data_payload(frame_session_id: u32, payload: Vec<u8>) {
-    let parsed: InboundMessage = match serde_json::from_slice(&payload) {
+    if payload.len() >= 3 && payload[0] == 0 && payload[1] == 0 && payload[2] == 0 {
+        crate::desktop::on_video_binary(frame_session_id, &payload);
+        return;
+    }
+    let value: serde_json::Value = match serde_json::from_slice(&payload) {
         Ok(v) => v,
         Err(_) => return,
     };
-    match parsed.kind {
-        1 => handle_hello_payload(parsed.data),
-        2 => handle_text_payload(frame_session_id, parsed.data),
-        3 => handle_file_query(frame_session_id, parsed.data),
-        4 => handle_file_reply(frame_session_id, parsed.data),
-        5 => crate::voice::on_audio_frame(frame_session_id, parsed.data),
-        6 => crate::voice::on_signal(frame_session_id, parsed.data),
+    match value.get("type") {
+        Some(t) if t.is_string() => match t.as_str().unwrap_or("") {
+            "backNasInfo" => crate::nas::emit_back_nas_info(frame_session_id, value.get("data").unwrap_or(&serde_json::Value::Null)),
+            "backPath" => crate::nas::emit_back_path(
+                frame_session_id,
+                value.get("data").unwrap_or(&serde_json::Value::Null),
+                value.get("path").and_then(|v| v.as_str()).unwrap_or(""),
+            ),
+            "backFile" => crate::nas::emit_back_file(
+                frame_session_id,
+                value.get("fileName").and_then(|v| v.as_str()).unwrap_or(""),
+                value.get("filePath").and_then(|v| v.as_str()).unwrap_or("/"),
+            ),
+            "putFile" | "createFile" | "getNasInfo" | "getPath" | "getFile" | "moveFile" | "moveFiles" | "deleteFile" | "renameFile" | "searchFile" | "zipFile" => {}
+            "backCreateFile" => crate::nas::emit_back_create_file(frame_session_id, &value),
+            "backMoveFile" | "backMoveFiles" => crate::nas::emit_back_move_file(frame_session_id, &value),
+            "backDeleteFile" => crate::nas::emit_back_delete_file(frame_session_id, &value),
+            "backRenameFile" => crate::nas::emit_back_rename_file(frame_session_id, &value),
+            "backSearchFile" => crate::nas::emit_back_search_file(frame_session_id, &value),
+            "backZipFile" => crate::nas::emit_back_zip_file(frame_session_id, &value),
+            _ => {}
+        },
+        Some(t) if t.is_number() => {
+            let kind = t.as_i64().unwrap_or(0);
+            let data = value.get("data").cloned().unwrap_or(serde_json::Value::Null);
+            match kind {
+                1 => handle_hello_payload(data),
+                2 => handle_text_payload(frame_session_id, data),
+                3 => handle_file_query(frame_session_id, data),
+                4 => handle_file_reply(frame_session_id, data),
+                5 => crate::voice::on_audio_frame(frame_session_id, data),
+                6 => crate::voice::on_signal(frame_session_id, data),
+                7 => crate::desktop::on_video_frame(frame_session_id, data),
+                8 => crate::desktop::on_signal(frame_session_id, data),
+                9 => crate::desktop::on_input(frame_session_id, data),
+                _ => {}
+            }
+        }
         _ => {}
     }
 }
@@ -1507,6 +1587,7 @@ fn handle_file_reply(session_id: u32, data: serde_json::Value) {
         })
     };
     let Some((msg_id, size, started, cancelled, transferred)) = job else {
+        crate::tasks::on_upload_ack(session_id, &file_name, bytes);
         return;
     };
     if cancelled {
@@ -1553,6 +1634,10 @@ fn handle_file_stream(session_id: u32, stream: &mut TcpStream) -> io::Result<()>
     let raw_name = String::from_utf8_lossy(&name_buf).into_owned();
     let file_name = storage::safe_filename(&raw_name);
     let chunk_len = read_u32_be(stream)? as u64;
+
+    if crate::nas::is_drive_session(session_id) {
+        return handle_nas_file_stream(session_id, &file_name, stream, chunk_len);
+    }
 
     let (owner, _) = login_identity();
     let peer = peer_token_of(session_id);
@@ -1622,5 +1707,39 @@ fn handle_file_stream(session_id: u32, stream: &mut TcpStream) -> io::Result<()>
         persist_file_event_async(event.clone());
     }
     emit_file_event(event);
+    Ok(())
+}
+
+fn handle_nas_file_stream(
+    session_id: u32,
+    file_name: &str,
+    stream: &mut TcpStream,
+    chunk_len: u64,
+) -> io::Result<()> {
+    let Some(dest) = crate::nas::recv_file_path(session_id, file_name) else {
+        return drain_exact(stream, chunk_len);
+    };
+    if let Some(parent) = dest.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let reset = !dest.exists();
+    let mut out = match open_recv_file(&dest, reset) {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("webrpc: open nas temp failed {}: {err}", dest.display());
+            return drain_exact(stream, chunk_len);
+        }
+    };
+    copy_tcp(stream, chunk_len, Some(&mut out))?;
+    out.flush()?;
+    drop(out);
+    if let Ok(meta) = std::fs::metadata(&dest) {
+        crate::tasks::on_download_bytes(session_id, meta.len());
+    }
+    eprintln!(
+        "webrpc: nas file chunk session={session_id} file={} bytes={chunk_len} dest={}",
+        file_name,
+        dest.display()
+    );
     Ok(())
 }

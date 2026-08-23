@@ -18,6 +18,7 @@
     "allow-webrpc",
     "allow-saved-accounts",
     "allow-saved-sessions",
+    "allow-saved-drives",
     "allow-saved-chats",
     "allow-file-stat",
     "allow-reveal-in-dir",

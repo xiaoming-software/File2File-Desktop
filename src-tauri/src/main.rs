@@ -1,18 +1,28 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 mod accounts;
 mod chats;
+mod dragout;
+mod drives;
+mod nas;
+mod tasks;
 mod sessions;
 mod screenshot;
 mod storage;
+mod desktop;
 mod voice;
 mod webrpc;
+
+#[cfg(target_os = "windows")]
+mod win;
 
 use tauri::Manager;
 
 const WINDOW_CORNER_RADIUS: f64 = 12.0;
 
 fn main() {
+    #[cfg(target_os = "windows")]
+    crate::win::silence_stdio();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -25,6 +35,29 @@ fn main() {
             webrpc::webrpc_send_data,
             webrpc::webrpc_send_file,
             webrpc::webrpc_close_session,
+            nas::nas_watch_start,
+            nas::nas_watch_stop,
+            nas::nas_list_path,
+            nas::nas_create_entry,
+            nas::nas_move_entry,
+            nas::nas_delete_entry,
+            nas::nas_rename_entry,
+            nas::nas_search,
+            nas::nas_zip_entry,
+            nas::nas_get_file,
+            nas::nas_read_text,
+            nas::nas_write_text,
+            nas::nas_put_file,
+            tasks::nas_task_list,
+            tasks::nas_task_bind,
+            tasks::nas_task_upload,
+            tasks::nas_task_upload_many,
+            tasks::nas_task_download,
+            dragout::nas_start_drag_out,
+            tasks::nas_task_retry,
+            tasks::nas_task_delete,
+            tasks::nas_task_clear,
+            tasks::nas_task_wipe,
             accounts::saved_accounts_list,
             accounts::saved_accounts_upsert,
             accounts::saved_accounts_delete,
@@ -32,6 +65,10 @@ fn main() {
             sessions::saved_sessions_create,
             sessions::saved_sessions_update,
             sessions::saved_sessions_delete,
+            drives::saved_drives_list,
+            drives::saved_drives_create,
+            drives::saved_drives_update,
+            drives::saved_drives_delete,
             chats::saved_chats_load,
             chats::saved_chats_append,
             chats::saved_chats_update,
@@ -41,6 +78,8 @@ fn main() {
             storage::file_stat,
             storage::inspect_paths,
             storage::reveal_in_dir,
+            storage::office_open_file,
+            storage::office_file_busy,
             screenshot::screenshot_start,
             screenshot::screenshot_overlay_info,
             screenshot::screenshot_overlay_png,
@@ -51,14 +90,30 @@ fn main() {
             voice::voice_reject,
             voice::voice_hangup,
             voice::voice_set_mute,
-            voice::voice_state
+            voice::voice_state,
+            desktop::desktop_invite,
+            desktop::desktop_accept,
+            desktop::desktop_reject,
+            desktop::desktop_hangup,
+            desktop::desktop_share_start,
+            desktop::desktop_share_stop,
+            desktop::desktop_state,
+            desktop::desktop_input
         ])
         .setup(|app| {
+            #[cfg(target_os = "windows")]
+            crate::win::silence_stdio();
             webrpc::install_exit_hooks();
             webrpc::set_app_handle(app.handle().clone());
             let window = app.get_webview_window("main").expect("missing main window");
-            let _ = window.set_shadow(true);
             let _ = window.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)));
+
+            #[cfg(target_os = "windows")]
+            crate::win::apply_transparent_chrome(&window);
+            #[cfg(target_os = "windows")]
+            crate::win::disable_default_context_menu(&window);
+            #[cfg(not(target_os = "windows"))]
+            let _ = window.set_shadow(true);
 
             #[cfg(target_os = "macos")]
             apply_macos_rounded_corners(&window, WINDOW_CORNER_RADIUS);

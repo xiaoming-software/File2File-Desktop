@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-saved-drives"
+description = "Allow reading and writing saved NAS / drive endpoints"
+commands.allow = [
+  "saved_drives_list",
+  "saved_drives_create",
+  "saved_drives_update",
+  "saved_drives_delete",
+]

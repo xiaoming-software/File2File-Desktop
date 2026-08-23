@@ -385,6 +385,8 @@ fn open_overlays(app: &AppHandle, shots: Vec<CapturedScreen>) -> Result<(), Stri
         let _ = win.set_size(PhysicalSize::new(shot.physical_w.max(1), shot.physical_h.max(1)));
         let _ = win.set_position(PhysicalPosition::new(shot.physical_x, shot.physical_y));
         elevate_overlay(&win);
+        #[cfg(target_os = "windows")]
+        crate::win::disable_default_context_menu(&win);
         pin_overlay_topmost(&win);
         let _ = win.show();
         let _ = win.set_focus();

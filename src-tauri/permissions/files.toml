@@ -6,4 +6,4 @@ commands.allow = ["file_stat", "inspect_paths"]
 [[permission]]
 identifier = "allow-reveal-in-dir"
 description = "Allow revealing a local file in the system file manager"
-commands.allow = ["reveal_in_dir"]
+commands.allow = ["reveal_in_dir", "office_open_file", "office_file_busy"]

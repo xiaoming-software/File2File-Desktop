@@ -31,7 +31,7 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSScreenCaptureUsageDescription</key>
-	<string>File2File 需要屏幕录制权限，才能截取屏幕并发送到当前会话。</string>
+	<string>File2File 需要屏幕录制权限，才能截取屏幕、进行远程桌面，并发送到当前会话。</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>File2File 需要使用麦克风，才能进行语音通话。</string>
 </dict>

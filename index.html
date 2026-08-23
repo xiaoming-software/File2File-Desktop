@@ -37,14 +37,13 @@
                 src="assets/file2file_logo.png"
                 alt="File2File"
               />
-              <p class="brand-tagline">File2File p2p文件传输工具</p>
-              <p class="brand-desc">使用 webrpc Token 登录后，即可管理会话并与对端安全传输文件。</p>
+              <p class="brand-tagline">安全直连，传文件、管网盘、控桌面</p>
               <ul class="brand-points">
-                <li>点对点直连，无需公网 IP</li>
-                <li>传输通道默认加密</li>
-                <li>适合跨设备、跨网络传文件</li>
+                <li>点对点传输大文件</li>
+                <li>访问自己的个人网盘</li>
+                <li>远程控制 Windows 电脑</li>
               </ul>
-              <p class="brand-slogan">专为大文件而生</p>
+              <p class="brand-slogan">无需公网 IP，数据不经过第三方网盘</p>
             </div>
           </aside>
 
@@ -175,26 +174,46 @@
           </header>
 
           <div class="workspace">
-            <aside class="session-pane">
-              <div class="session-pane-head">
-                <h2>会话</h2>
-                <button class="btn-new-session" id="btn-new-session" type="button">新建会话</button>
-              </div>
-              <div class="session-list" id="session-list"></div>
+            <aside class="session-pane" id="session-pane">
+              <section class="session-section is-chat" id="session-section-chat" aria-label="聊天会话">
+                <div class="session-pane-head">
+                  <h2>聊天会话</h2>
+                  <button class="btn-new-session" id="btn-new-session" type="button">新建会话</button>
+                </div>
+                <div class="session-list" id="session-list"></div>
+              </section>
+              <div
+                class="session-split"
+                id="session-split"
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label="拖动调整聊天会话与网盘区域高度"
+                title="拖动调整高度"
+              ></div>
+              <section class="session-section is-drive" id="session-section-drive" aria-label="网盘连接">
+                <div class="session-pane-head">
+                  <h2>网盘连接</h2>
+                  <button class="btn-new-session" id="btn-new-drive" type="button">新建连接</button>
+                </div>
+                <div class="session-list" id="drive-list"></div>
+              </section>
             </aside>
 
             <section class="chat-pane" id="chat-pane">
               <div class="chat-panel" id="panel-unselected">
                 <div class="sessions-empty-icon" aria-hidden="true"></div>
-                <h2>未选择会话</h2>
-                <p>在左侧选择一个会话，或点击「新建会话」连接对端。</p>
+                <h2>未选择</h2>
+                <p>在左侧选择一个聊天会话或网盘，或点击「新建会话」「新建连接」。</p>
               </div>
 
               <div class="chat-panel connect-panel" id="panel-connect">
                 <div class="connect-card">
-                  <div class="connect-mark" aria-hidden="true"></div>
-                  <h2>请先建立 P2P 连接</h2>
-                  <p class="connect-desc">当前会话尚未与对端连通，连接成功后即可收发消息和文件。</p>
+                  <div class="connect-mark" id="connect-mark" aria-hidden="true">
+                    <span class="chat-glyph"></span>
+                    <span class="drive-glyph"></span>
+                  </div>
+                  <h2 id="connect-title">请先建立 P2P 连接</h2>
+                  <p class="connect-desc" id="connect-desc">当前会话尚未与对端连通，连接成功后即可收发消息和文件。</p>
                   <p class="connect-peer" id="connect-peer"></p>
                   <label class="field connect-pass-field" for="connect-peer-pass">
                     <span>认证口令</span>
@@ -221,6 +240,94 @@
                     连接失败。请确认对方 Token 是否在线，以及当前网络是否可达。
                   </p>
                 </div>
+              </div>
+
+              <div class="chat-panel nas-explorer" id="panel-drive">
+                <header class="nas-head">
+                  <div class="nas-head-main">
+                    <span class="peer-item-icon is-online" aria-hidden="true">
+                      <span class="drive-glyph"></span>
+                    </span>
+                    <div class="nas-head-text">
+                      <h2 id="nas-title">网盘连接</h2>
+                    </div>
+                  </div>
+                  <div class="nas-head-actions">
+                    <button type="button" class="nas-head-btn" id="nas-upload">上传</button>
+                    <button type="button" class="nas-head-btn" id="nas-task-toggle">
+                      任务
+                      <span class="nas-task-badge" id="nas-task-badge" hidden>0</span>
+                    </button>
+                    <div class="nas-view-toggle" role="group" aria-label="显示方式">
+                      <button type="button" id="nas-view-list" data-nas-view="list" title="列表">列表</button>
+                      <button type="button" id="nas-view-grid" data-nas-view="grid" title="图标">图标</button>
+                    </div>
+                  </div>
+                  <div class="nas-path-row">
+                    <button type="button" class="nas-path-btn is-icon" id="nas-path-up" title="向上" aria-label="向上" disabled>
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path fill="currentColor" d="M11 19V8.83L6.12 13.71a1 1 0 1 1-1.41-1.41l6.58-6.59a1 1 0 0 1 1.42 0l6.58 6.59a1 1 0 0 1-1.41 1.41L13 8.83V19a1 1 0 1 1-2 0z"/>
+                      </svg>
+                    </button>
+                    <nav id="nas-path" class="nas-crumb" aria-label="当前路径">/</nav>
+                    <button type="button" class="nas-path-btn is-icon" id="nas-path-refresh" title="刷新" aria-label="刷新">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path fill="currentColor" d="M17.65 6.35A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.75 10h-2.1A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+                      </svg>
+                    </button>
+                    <div class="nas-search">
+                      <input id="nas-search" type="search" spellcheck="false" placeholder="搜索网盘" autocomplete="off" />
+                      <div class="nas-search-drop" id="nas-search-drop" hidden></div>
+                    </div>
+                  </div>
+                </header>
+                <section class="nas-stats" aria-label="网盘概况">
+                  <div class="nas-stats-row">
+                    <span class="nas-stat">
+                      <label>总容量</label>
+                      <strong id="nas-disk-total">—</strong>
+                    </span>
+                    <span class="nas-stat">
+                      <label>剩余</label>
+                      <strong id="nas-disk-free">—</strong>
+                    </span>
+                    <span class="nas-stat">
+                      <label>已用</label>
+                      <strong id="nas-disk-used">—</strong>
+                    </span>
+                    <span class="nas-stat">
+                      <label>文件</label>
+                      <strong id="nas-file-num">—</strong>
+                    </span>
+                  </div>
+                  <div class="nas-meter" aria-hidden="true">
+                    <span id="nas-meter-bar"></span>
+                  </div>
+                  <p class="nas-stats-hint" id="nas-stats-hint">正在获取网盘信息…</p>
+                </section>
+                <div class="nas-files" id="nas-files" data-view="list">
+                  <div class="nas-list-head" aria-hidden="true">
+                    <span>名称</span>
+                    <span>种类</span>
+                    <span>大小</span>
+                    <span>修改日期</span>
+                  </div>
+                  <div class="nas-file-body" id="nas-file-body"></div>
+                  <div class="nas-drop-mask" id="nas-drop-mask" hidden>
+                    <div class="chat-drop-card" id="nas-drop-hint">松开即可上传到当前目录</div>
+                  </div>
+                </div>
+                <section class="nas-tasks" id="nas-tasks" hidden>
+                  <header class="nas-tasks-head">
+                    <h3>任务</h3>
+                    <div class="nas-tasks-head-actions">
+                      <button type="button" class="nas-head-btn" id="nas-task-clear">清除</button>
+                      <button type="button" class="nas-task-close" id="nas-task-close" title="关闭任务" aria-label="关闭任务">×</button>
+                    </div>
+                  </header>
+                  <div class="nas-task-list" id="nas-task-list"></div>
+                </section>
+                <input id="nas-upload-input" type="file" hidden />
               </div>
 
               <div class="chat-panel chat-main" id="chat-main">
@@ -250,6 +357,7 @@
                     ></textarea>
                     <input id="file-input" type="file" hidden />
                     <button class="btn-voice" id="btn-voice" type="button" title="语音通话">语音</button>
+                    <button class="btn-voice" id="btn-desktop" type="button" title="远程控制">远程控制</button>
                     <div class="shot-split" id="shot-split">
                       <button class="btn-shot" id="btn-shot" type="button" title="截图 (⌃⌘A)">截图</button>
                       <button
@@ -282,9 +390,12 @@
 
       <div class="modal-root" id="modal-root" hidden>
         <div class="modal-backdrop" data-close-modal></div>
-        <div class="modal" id="modal-new-session" hidden>
+        <div class="modal modal-hero-card" id="modal-new-session" hidden>
+          <div class="modal-chat-hero" aria-hidden="true">
+            <span class="chat-glyph"></span>
+          </div>
           <h3>新建会话</h3>
-          <p class="modal-desc">输入对方 Token 添加到会话列表。认证口令可留空，连接时仍可修改。</p>
+          <p class="modal-desc">输入对方 Token 添加到聊天会话列表。认证口令可留空，连接时仍可修改。</p>
           <label class="field">
             <span>对方 Token</span>
             <input id="new-peer-token" type="text" spellcheck="false" placeholder="请输入对方 Token" />
@@ -299,8 +410,30 @@
             <button type="button" class="btn-primary" id="btn-create-session">添加</button>
           </div>
         </div>
+        <div class="modal modal-hero-card" id="modal-new-drive" hidden>
+          <div class="modal-drive-hero" aria-hidden="true">
+            <span class="drive-glyph"></span>
+          </div>
+          <h3>新建连接</h3>
+          <p class="modal-desc">
+            输入家里 NAS 或网盘设备的 webrpc Token，添加到「网盘连接」。连接后可查阅和更新 NAS 上的文件。认证口令可留空，连接时仍可修改。
+          </p>
+          <label class="field">
+            <span>网盘 Token</span>
+            <input id="new-drive-token" type="text" spellcheck="false" placeholder="请输入网盘 Token" />
+          </label>
+          <label class="field">
+            <span>认证口令</span>
+            <input id="new-drive-pass" type="text" placeholder="可留空" />
+          </label>
+          <p class="modal-error" id="new-drive-error" hidden>请输入网盘 Token</p>
+          <div class="modal-actions">
+            <button type="button" class="btn-ghost" data-close-modal>取消</button>
+            <button type="button" class="btn-primary" id="btn-create-drive">添加</button>
+          </div>
+        </div>
         <div class="modal" id="modal-remark" hidden>
-          <h3>设置备注</h3>
+          <h3 id="remark-title">设置备注</h3>
           <label class="field">
             <span>备注名称</span>
             <input id="remark-input" type="text" maxlength="40" placeholder="例如：办公室 NAS" />
@@ -313,9 +446,58 @@
         <div class="modal" id="modal-confirm" hidden>
           <h3 id="confirm-title">删除会话</h3>
           <p class="modal-desc" id="confirm-desc">删除后将从列表和本地缓存中移除。</p>
+          <ul class="modal-fail-list" id="confirm-fail-list" hidden></ul>
           <div class="modal-actions">
             <button type="button" class="btn-ghost" id="btn-confirm-cancel" data-close-modal>取消</button>
             <button type="button" class="btn-danger" id="btn-confirm-ok">删除</button>
+          </div>
+        </div>
+        <div class="modal" id="modal-nas-create" hidden>
+          <h3 id="nas-create-title">新建文件</h3>
+          <p class="modal-desc" id="nas-create-hint">请填写文件名，必须包含扩展名，例如 readme.txt</p>
+          <label class="field">
+            <span id="nas-create-label">文件名</span>
+            <input id="nas-create-input" type="text" maxlength="200" spellcheck="false" placeholder="" />
+          </label>
+          <p class="modal-error" id="nas-create-error" hidden></p>
+          <div class="modal-actions">
+            <button type="button" class="btn-ghost" id="nas-create-cancel" data-close-modal>取消</button>
+            <button type="button" class="btn-primary" id="nas-create-ok">确认</button>
+          </div>
+        </div>
+        <div class="modal modal-nas-move" id="modal-nas-move" hidden>
+          <h3>移动到</h3>
+          <p class="modal-desc" id="nas-move-hint">
+            将所选项目移动到下面打开的目录。可编辑路径后回车或点「打开」进入，双击文件夹进入子目录。点「确定」后移动到当前打开的目录。
+          </p>
+          <div class="nas-move-path">
+            <button type="button" class="nas-path-btn is-icon" id="nas-move-up" title="向上" aria-label="向上">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path fill="currentColor" d="M11 19V8.83L6.12 13.71a1 1 0 1 1-1.41-1.41l6.58-6.59a1 1 0 0 1 1.42 0l6.58 6.59a1 1 0 0 1-1.41 1.41L13 8.83V19a1 1 0 1 1-2 0z"/>
+              </svg>
+            </button>
+            <input id="nas-move-path" type="text" spellcheck="false" placeholder="/文档/工作" />
+            <button type="button" class="nas-path-btn" id="nas-move-go">打开</button>
+          </div>
+          <div class="nas-move-list" id="nas-move-list"></div>
+          <p class="modal-error" id="nas-move-error" hidden></p>
+          <div class="modal-actions">
+            <button type="button" class="btn-ghost" data-close-modal>取消</button>
+            <button type="button" class="btn-primary" id="nas-move-ok">确定</button>
+          </div>
+        </div>
+        <div class="modal modal-nas-zip" id="modal-nas-zip" hidden>
+          <h3 id="nas-zip-title">正在压缩</h3>
+          <p class="modal-desc" id="nas-zip-desc">正在压缩文件夹…</p>
+          <div class="nas-zip-progress" id="nas-zip-progress">
+            <div class="nas-zip-spinner" id="nas-zip-spinner" aria-hidden="true"></div>
+            <div class="nas-zip-bar" aria-hidden="true"><span id="nas-zip-bar"></span></div>
+            <p class="nas-zip-pct" id="nas-zip-pct">0%</p>
+          </div>
+          <p class="modal-error" id="nas-zip-error" hidden></p>
+          <div class="modal-actions">
+            <button type="button" class="btn-ghost" id="nas-zip-async">后台进行</button>
+            <button type="button" class="btn-primary" id="nas-zip-ok" hidden>关闭</button>
           </div>
         </div>
       </div>
@@ -324,12 +506,97 @@
   <div class="bubble-menu" id="bubble-menu" hidden>
     <button type="button" data-bubble-action="delete">删除</button>
   </div>
+  <div class="nas-ctx" id="nas-ctx" hidden>
+    <button type="button" class="nas-ctx-action" id="nas-ctx-download" data-nas-download hidden>下载</button>
+    <button type="button" class="nas-ctx-action" id="nas-ctx-move" data-nas-move hidden>移动</button>
+    <button type="button" class="nas-ctx-action" id="nas-ctx-rename" data-nas-rename hidden>重命名</button>
+    <button type="button" class="nas-ctx-action" id="nas-ctx-zip" data-nas-zip hidden>压缩</button>
+    <button type="button" class="nas-ctx-action is-danger" id="nas-ctx-delete" data-nas-delete hidden>删除</button>
+    <div class="nas-ctx-item has-sub">
+      <button type="button" class="nas-ctx-btn">新建</button>
+      <div class="nas-ctx-sub">
+        <button type="button" data-nas-create="folder">文件夹</button>
+        <button type="button" data-nas-create="file">文件</button>
+      </div>
+    </div>
+  </div>
   <div class="media-overlay" id="media-overlay" hidden>
     <div class="media-overlay-backdrop" data-close-media></div>
     <div class="media-overlay-panel">
       <button type="button" class="media-overlay-close" data-close-media aria-label="关闭">×</button>
       <img class="media-overlay-image" id="media-overlay-image" alt="" hidden />
       <video class="media-overlay-video" id="media-overlay-video" controls hidden></video>
+    </div>
+  </div>
+  <div class="media-overlay" id="nas-preview" hidden>
+    <div class="media-overlay-backdrop" data-close-nas-preview></div>
+    <div class="media-overlay-panel">
+      <button type="button" class="media-overlay-close" data-close-nas-preview aria-label="关闭">×</button>
+      <div class="nas-preview-loading" id="nas-preview-loading" hidden>
+        <div class="nas-preview-spinner" id="nas-preview-spinner" aria-hidden="true"></div>
+        <p class="nas-preview-status" id="nas-preview-status"></p>
+      </div>
+      <img class="media-overlay-image" id="nas-preview-image" alt="" hidden />
+      <video class="media-overlay-video" id="nas-preview-video" controls hidden></video>
+      <audio class="nas-preview-audio" id="nas-preview-audio" controls hidden></audio>
+    </div>
+  </div>
+  <div class="nas-editor nas-office" id="nas-office" hidden>
+    <div class="nas-editor-card nas-office-card">
+      <header class="nas-editor-head">
+        <div>
+          <h2 id="nas-office-title">文稿</h2>
+          <p id="nas-office-path">/</p>
+        </div>
+        <p class="nas-editor-hint" id="nas-office-hint"></p>
+      </header>
+      <div class="nas-office-body">
+        <div class="nas-office-loading" id="nas-office-loading">
+          <div class="nas-preview-spinner" id="nas-office-spinner" aria-hidden="true"></div>
+          <p id="nas-office-status">正在加载文件…</p>
+        </div>
+        <p class="nas-office-guide" id="nas-office-guide" hidden>已使用系统软件打开。请在办公软件中保存修改后，回到这里点击「同步到网盘」。</p>
+      </div>
+      <footer class="nas-editor-foot">
+        <button type="button" class="btn-ghost" id="nas-office-exit">退出</button>
+        <button type="button" class="btn-primary" id="nas-office-sync">同步到网盘</button>
+      </footer>
+    </div>
+    <div class="nas-editor-ask" id="nas-office-ask" hidden>
+      <div class="nas-editor-ask-card">
+        <p>文件已修改，是否同步到网盘？</p>
+        <div class="nas-editor-ask-actions">
+          <button type="button" class="btn-ghost" id="nas-office-ask-cancel">取消</button>
+          <button type="button" class="btn-ghost" id="nas-office-ask-discard">不同步</button>
+          <button type="button" class="btn-primary" id="nas-office-ask-sync">同步</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="nas-editor" id="nas-editor" hidden>
+    <div class="nas-editor-card">
+      <header class="nas-editor-head">
+        <div>
+          <h2 id="nas-editor-title">文本</h2>
+          <p id="nas-editor-path">/</p>
+        </div>
+        <p class="nas-editor-hint" id="nas-editor-hint"></p>
+      </header>
+      <textarea id="nas-editor-body" spellcheck="false"></textarea>
+      <footer class="nas-editor-foot">
+        <button type="button" class="btn-ghost" id="nas-editor-exit">退出</button>
+        <button type="button" class="btn-primary" id="nas-editor-save">保存</button>
+      </footer>
+    </div>
+    <div class="nas-editor-ask" id="nas-editor-ask" hidden>
+      <div class="nas-editor-ask-card">
+        <p>文件已修改，是否保存？</p>
+        <div class="nas-editor-ask-actions">
+          <button type="button" class="btn-ghost" id="nas-editor-ask-cancel">取消</button>
+          <button type="button" class="btn-ghost" id="nas-editor-ask-discard">不保存</button>
+          <button type="button" class="btn-primary" id="nas-editor-ask-save">保存</button>
+        </div>
+      </div>
     </div>
   </div>
   <div class="voice-root" id="voice-root" hidden>
@@ -346,6 +613,37 @@
         <button type="button" class="voice-btn is-accept" id="voice-accept" hidden>接听</button>
         <button type="button" class="voice-btn is-hangup" id="voice-hangup" hidden>挂断</button>
       </div>
+    </div>
+  </div>
+  <div class="desktop-root" id="desktop-root" hidden>
+    <div class="desktop-card">
+      <div class="desktop-bar">
+        <div class="desktop-bar-text">
+          <h3 id="desktop-title">远程控制</h3>
+          <p id="desktop-sub">—</p>
+        </div>
+        <span class="desktop-stats" id="desktop-stats" hidden>—</span>
+        <div class="desktop-actions">
+          <button type="button" class="voice-btn is-cancel" id="desktop-cancel" hidden>取消</button>
+          <button type="button" class="voice-btn is-reject" id="desktop-reject" hidden>拒绝</button>
+          <button type="button" class="voice-btn is-accept" id="desktop-accept" hidden>同意</button>
+          <button type="button" class="voice-btn is-mute" id="desktop-full" hidden>全屏</button>
+          <button type="button" class="voice-btn is-hangup" id="desktop-stop" hidden>结束</button>
+        </div>
+      </div>
+      <div class="desktop-stage" id="desktop-stage" hidden>
+        <canvas id="desktop-frame" hidden></canvas>
+        <div class="desktop-cursor" id="desktop-cursor" hidden></div>
+        <p class="desktop-placeholder" id="desktop-placeholder">等待对方桌面…</p>
+      </div>
+    </div>
+  </div>
+  <div class="nas-marquee" id="nas-marquee" hidden></div>
+  <div class="nas-drag-ghost" id="nas-drag-ghost" hidden>
+    <span class="nas-icon is-file" id="nas-drag-ghost-icon"></span>
+    <div class="nas-drag-ghost-text">
+      <span class="nas-drag-ghost-name" id="nas-drag-ghost-name"></span>
+      <span class="nas-drag-ghost-tip" id="nas-drag-ghost-tip">拖到文件夹后松开即可移动</span>
     </div>
   </div>
   <script src="js/app.js"></script>
