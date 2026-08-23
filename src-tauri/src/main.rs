@@ -80,6 +80,7 @@ fn main() {
             storage::reveal_in_dir,
             storage::office_open_file,
             storage::office_file_busy,
+            storage::office_snapshot_file,
             screenshot::screenshot_start,
             screenshot::screenshot_overlay_info,
             screenshot::screenshot_overlay_png,

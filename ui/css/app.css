@@ -2907,6 +2907,115 @@ body.is-nas-selecting * {
   display: none;
 }
 
+.nas-office-dock {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  z-index: 75;
+  transform: translateX(-50%);
+  max-width: min(920px, calc(100vw - 32px));
+}
+
+.nas-office-dock[hidden] {
+  display: none;
+}
+
+.nas-office-dock-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid var(--line);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.16);
+}
+
+.nas-office-dock-label {
+  margin: 0;
+  padding: 0 6px 0 4px;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.nas-office-dock-list {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.nas-office-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 240px;
+  padding: 6px 8px 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f8fafc;
+  cursor: pointer;
+}
+
+.nas-office-chip.is-active {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.nas-office-chip-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.nas-office-chip-name {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nas-office-chip-status {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.nas-office-chip.is-dirty .nas-office-chip-status {
+  color: #b45309;
+}
+
+.nas-office-chip.is-syncing .nas-office-chip-status {
+  color: #2563eb;
+}
+
+.nas-office-chip-close {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.nas-office-chip-close:hover {
+  background: rgba(15, 23, 42, 0.08);
+  color: var(--text);
+}
+
+body.has-office-dock .nas-files {
+  padding-bottom: 64px;
+}
+
 .composer {
   flex-shrink: 0;
   padding: 8px 12px 12px;

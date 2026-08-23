@@ -3,6 +3,18 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(windows)]
+use std::io::{self, Write};
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
+
+#[cfg(windows)]
+const WIN_SHARE_READ: u32 = 0x00000001;
+#[cfg(windows)]
+const WIN_SHARE_WRITE: u32 = 0x00000002;
+#[cfg(windows)]
+const WIN_SHARE_DELETE: u32 = 0x00000004;
+
 use serde::Serialize;
 
 const APP_DATA_DIR_NAME: &str = "file2file_data";
@@ -423,6 +435,52 @@ pub fn office_file_busy(path: String) -> Result<bool, String> {
     match OpenOptions::new().read(true).write(true).open(&path) {
         Ok(_) => Ok(false),
         Err(_) => Ok(true),
+    }
+}
+
+#[tauri::command]
+pub fn office_snapshot_file(path: String) -> Result<String, String> {
+    let src = PathBuf::from(path.trim());
+    if !src.is_file() {
+        return Err("file-missing".into());
+    }
+    let name = src
+        .file_name()
+        .and_then(|item| item.to_str())
+        .unwrap_or("file");
+    if name.starts_with("~$") || name.starts_with(".f2f-sync-") {
+        return Err("skip-file".into());
+    }
+    let dest = src.with_file_name(format!(".f2f-sync-{name}"));
+    copy_office_shared(&src, &dest)?;
+    Ok(dest.to_string_lossy().into_owned())
+}
+
+fn copy_office_shared(src: &Path, dest: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let mut input = OpenOptions::new()
+            .read(true)
+            .share_mode(WIN_SHARE_READ | WIN_SHARE_WRITE | WIN_SHARE_DELETE)
+            .open(src)
+            .map_err(|err| format!("snapshot-open: {err}"))?;
+        let mut output = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(dest)
+            .map_err(|err| format!("snapshot-create: {err}"))?;
+        io::copy(&mut input, &mut output).map_err(|err| format!("snapshot-copy: {err}"))?;
+        output
+            .flush()
+            .map_err(|err| format!("snapshot-flush: {err}"))?;
+        return Ok(());
+    }
+    #[cfg(not(windows))]
+    {
+        fs::copy(src, dest)
+            .map(|_| ())
+            .map_err(|err| format!("snapshot-copy: {err}"))
     }
 }
 

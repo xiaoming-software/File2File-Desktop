@@ -229,22 +229,14 @@
   const nasOfficeAskCancel = document.getElementById("nas-office-ask-cancel");
   const nasOfficeAskDiscard = document.getElementById("nas-office-ask-discard");
   const nasOfficeAskSync = document.getElementById("nas-office-ask-sync");
-  const nasOfficeCtl = {
-    sessionId: 0,
-    name: "",
-    path: "",
-    localPath: "",
-    origSize: 0,
-    origMtime: 0,
-    lastSize: 0,
-    lastMtime: 0,
-    saving: false,
-    closeAfterSave: false,
-    opened: false,
-    noApp: false,
-    saveTimer: 0,
-    watchTimer: 0,
-  };
+  const nasOfficeDock = document.getElementById("nas-office-dock");
+  const nasOfficeDockList = document.getElementById("nas-office-dock-list");
+  const NAS_OFFICE_STABLE_MS = 2500;
+  let nasOfficeDocs = [];
+  let nasOfficeNextId = 1;
+  let nasOfficeFocusId = 0;
+  let nasOfficeWatchTimer = 0;
+  let nasOfficeAskForId = 0;
   const nasEditorEl = document.getElementById("nas-editor");
   const nasEditorTitle = document.getElementById("nas-editor-title");
   const nasEditorPath = document.getElementById("nas-editor-path");
@@ -460,7 +452,9 @@
     }
 
     bindWin(".tl-close, .win-btn-close", function (win) {
-      win.close();
+      flushOfficeDocsThen(function () {
+        win.close();
+      });
     });
     bindWin(".tl-min, .titlebar-win-controls .win-btn:nth-child(1)", function (win) {
       win.minimize();
@@ -2213,7 +2207,7 @@
     if (isDrive(session)) {
       closeNasPreview();
       if (nasEditorCtl.sessionId === sid) forceCloseNasEditor();
-      if (nasOfficeCtl.sessionId === sid) forceCloseNasOffice();
+      closeOfficeDocsForSession(sid);
     }
     failSessionTransfers(session);
     renderWorkspace();
@@ -2596,6 +2590,8 @@
     drive.nasTasks = next;
     drive.nasTasksLoaded = true;
     if (state.selectedId === drive.id) renderNasTaskPanel(drive);
+    pumpOfficeDownload();
+    pumpOfficeSync();
   }
 
   function onNasTask(payload) {
@@ -4905,6 +4901,7 @@
 
   function previewNasOffice(session, file, kind) {
     const name = file.name;
+    if (String(name || "").indexOf("~$") === 0) return;
     const officeKind = kind || "doc";
     if (file.size != null && isFinite(file.size) && file.size >= NAS_OFFICE_MAX) {
       session.nasPreviewSeq = (session.nasPreviewSeq || 0) + 1;
@@ -4913,22 +4910,23 @@
       showNasPreview(session, name, "", "文件过大无法在线编辑", false);
       return;
     }
-    beginNasPreview(session, name, officeKind);
-    const seq = session.nasPreviewSeq;
-    showNasOfficePanel(session, "正在下载文件…", true);
-    requestNasPreviewFile(session, file, seq, function (result) {
-      if (!result || !result.localPath) {
-        setNasOfficeLoading(false, "无法打开，请稍后重试");
-        return;
-      }
-      if (result.cached) openNasOfficeFromPath(session, result.localPath);
+    if (!prepareNasOpen(officeKind)) return;
+    const path = normalizeNasPath(session.nasPath || "/");
+    const sid = session.rpcSessionId || 0;
+    let doc = findOfficeDoc(sid, path, name);
+    if (doc) {
+      reopenOfficeDoc(doc);
+      return;
+    }
+    doc = createOfficeDoc({
+      sessionId: sid,
+      name: name,
+      path: path,
+      pending: true,
     });
-    window.setTimeout(function () {
-      if (!session || session.nasPreviewSeq !== seq) return;
-      if (!nasOfficeEl || nasOfficeEl.hidden) return;
-      if (nasOfficeCtl.opened || nasOfficeCtl.noApp) return;
-      setNasOfficeLoading(false, "打开超时");
-    }, 90000);
+    focusOfficeDoc(doc, true);
+    showNasOfficePanelFor(doc, "正在下载文件…", true);
+    pumpOfficeDownload();
   }
 
   function prepareNasOpen(kind) {
@@ -4939,18 +4937,8 @@
       }
       forceCloseNasEditor();
     }
-    if (nasOfficeEl && !nasOfficeEl.hidden) {
-      if (!isNasOfficeKind(kind) && nasOfficeDirty()) {
-        requestNasOfficeExit();
-        return false;
-      }
-      if (!isNasOfficeKind(kind)) forceCloseNasOffice();
-      else if (nasOfficeDirty()) {
-        requestNasOfficeExit();
-        return false;
-      } else {
-        forceCloseNasOffice();
-      }
+    if (nasOfficeEl && !nasOfficeEl.hidden && !isNasOfficeKind(kind)) {
+      hideNasOfficeOverlay();
     }
     return true;
   }
@@ -5030,6 +5018,21 @@
     if (!drive) return;
     const name = String(payload.fileName || "");
     const dir = normalizeNasPath(payload.filePath || "/");
+    const officeDoc = findOfficeDoc(sid, dir, name);
+    if (officeDoc && (officeDoc.pending || !officeDoc.opened)) {
+      officeDoc.downloadStarted = false;
+      if (!payload.ok || !payload.localPath) {
+        officeDoc.pending = false;
+        setOfficeDocHint(officeDoc, "无法打开，请稍后重试");
+        showNasOfficePanelFor(officeDoc, "无法打开，请稍后重试", false);
+        renderOfficeDock();
+        pumpOfficeDownload();
+        return;
+      }
+      openNasOfficeFromPath(officeDoc, payload.localPath);
+      pumpOfficeDownload();
+      return;
+    }
     if (!drive.nasPreviewName) return;
     if (name && name !== drive.nasPreviewName) return;
     if (drive.nasPreviewPath && dir !== drive.nasPreviewPath) return;
@@ -5051,7 +5054,8 @@
       return;
     }
     if (isNasOfficeKind(drive.nasPreviewKind)) {
-      openNasOfficeFromPath(drive, payload.localPath);
+      const fallback = findOfficeDoc(sid, dir, name) || focusedOfficeDoc();
+      if (fallback) openNasOfficeFromPath(fallback, payload.localPath);
       return;
     }
     openNasPreviewImage(drive, name || drive.nasPreviewName, payload.localPath);
@@ -5280,7 +5284,8 @@
   function bindNasOffice() {
     if (nasOfficeSync) {
       nasOfficeSync.addEventListener("click", function () {
-        syncNasOffice(false);
+        const doc = focusedOfficeDoc();
+        if (doc) queueOfficeSync(doc, false, true);
       });
     }
     if (nasOfficeExit) {
@@ -5291,30 +5296,118 @@
     }
     if (nasOfficeAskDiscard) {
       nasOfficeAskDiscard.addEventListener("click", function () {
+        const doc = findOfficeDocById(nasOfficeAskForId) || focusedOfficeDoc();
         hideNasOfficeAsk();
-        forceCloseNasOffice();
+        if (doc) removeOfficeDoc(doc);
       });
     }
     if (nasOfficeAskSync) {
       nasOfficeAskSync.addEventListener("click", function () {
+        const doc = findOfficeDocById(nasOfficeAskForId) || focusedOfficeDoc();
         hideNasOfficeAsk();
-        syncNasOffice(true);
+        if (doc) queueOfficeSync(doc, true, true);
+      });
+    }
+    if (nasOfficeDockList) {
+      nasOfficeDockList.addEventListener("click", function (event) {
+        const closeBtn = event.target.closest(".nas-office-chip-close");
+        const chip = event.target.closest(".nas-office-chip");
+        const id = Number((closeBtn || chip) && (closeBtn || chip).getAttribute("data-id")) || 0;
+        const doc = findOfficeDocById(id);
+        if (!doc) return;
+        if (closeBtn) {
+          event.preventDefault();
+          event.stopPropagation();
+          requestRemoveOfficeDoc(doc);
+          return;
+        }
+        reopenOfficeDoc(doc);
       });
     }
   }
 
-  function nasOfficeDirty() {
-    return (
-      Number(nasOfficeCtl.lastSize) !== Number(nasOfficeCtl.origSize) ||
-      Number(nasOfficeCtl.lastMtime) !== Number(nasOfficeCtl.origMtime)
-    );
+  function findOfficeDocById(id) {
+    const nid = Number(id) || 0;
+    if (!nid) return null;
+    return nasOfficeDocs.find(function (item) {
+      return item.id === nid;
+    }) || null;
+  }
+
+  function findOfficeDoc(sessionId, path, name) {
+    const sid = Number(sessionId) || 0;
+    const dir = normalizeNasPath(path || "/");
+    const fileName = String(name || "");
+    if (!sid || !fileName) return null;
+    return nasOfficeDocs.find(function (item) {
+      return item.sessionId === sid && item.path === dir && item.name === fileName;
+    }) || null;
+  }
+
+  function focusedOfficeDoc() {
+    return findOfficeDocById(nasOfficeFocusId);
+  }
+
+  function officeDocDirty(doc) {
+    if (!doc || !doc.opened) return false;
+    return Number(doc.lastSize) !== Number(doc.origSize) || Number(doc.lastMtime) !== Number(doc.origMtime);
+  }
+
+  function officeSessionBusy(sessionId, exceptId) {
+    const sid = Number(sessionId) || 0;
+    if (!sid) return true;
+    if (driveHasRunningTask(findDriveByRpc(sid))) return true;
+    return nasOfficeDocs.some(function (item) {
+      if (item.id === exceptId) return false;
+      if (item.sessionId !== sid) return false;
+      return !!(item.saving || (item.pending && item.downloadStarted));
+    });
+  }
+
+  function createOfficeDoc(init) {
+    const doc = {
+      id: nasOfficeNextId++,
+      sessionId: Number(init && init.sessionId) || 0,
+      name: (init && init.name) || "",
+      path: normalizeNasPath((init && init.path) || "/"),
+      localPath: "",
+      origSize: 0,
+      origMtime: 0,
+      lastSize: 0,
+      lastMtime: 0,
+      syncSize: 0,
+      syncMtime: 0,
+      changedAt: 0,
+      saving: false,
+      queued: false,
+      pending: !!(init && init.pending),
+      downloadStarted: false,
+      closeAfterSave: false,
+      opened: false,
+      noApp: false,
+      saveTimer: 0,
+      openTimer: 0,
+      hint: "",
+    };
+    nasOfficeDocs.push(doc);
+    ensureOfficeWatch();
+    renderOfficeDock();
+    return doc;
+  }
+
+  function clearOfficeDocTimer(doc, key) {
+    if (!doc || !doc[key]) return;
+    window.clearTimeout(doc[key]);
+    doc[key] = 0;
   }
 
   function hideNasOfficeAsk() {
+    nasOfficeAskForId = 0;
     if (nasOfficeAsk) nasOfficeAsk.hidden = true;
   }
 
-  function showNasOfficeAsk() {
+  function showNasOfficeAsk(doc) {
+    nasOfficeAskForId = doc && doc.id ? doc.id : 0;
     if (nasOfficeAsk) nasOfficeAsk.hidden = false;
   }
 
@@ -5324,7 +5417,6 @@
 
   function setNasOfficeBusy(busy) {
     if (nasOfficeSync) nasOfficeSync.disabled = !!busy;
-    if (nasOfficeExit) nasOfficeExit.disabled = !!busy;
   }
 
   function setNasOfficeLoading(loading, status) {
@@ -5334,262 +5426,491 @@
     if (!loading && status) setNasOfficeHint(status);
   }
 
-  function clearNasOfficeTimers() {
-    if (nasOfficeCtl.saveTimer) {
-      window.clearTimeout(nasOfficeCtl.saveTimer);
-      nasOfficeCtl.saveTimer = 0;
-    }
-    if (nasOfficeCtl.watchTimer) {
-      window.clearTimeout(nasOfficeCtl.watchTimer);
-      nasOfficeCtl.watchTimer = 0;
-    }
+  function setOfficeDocHint(doc, text) {
+    if (!doc) return;
+    doc.hint = text || "";
+    if (focusedOfficeDoc() === doc) setNasOfficeHint(doc.hint);
   }
 
-  function resetNasOfficeCtl() {
-    clearNasOfficeTimers();
-    nasOfficeCtl.sessionId = 0;
-    nasOfficeCtl.name = "";
-    nasOfficeCtl.path = "";
-    nasOfficeCtl.localPath = "";
-    nasOfficeCtl.origSize = 0;
-    nasOfficeCtl.origMtime = 0;
-    nasOfficeCtl.lastSize = 0;
-    nasOfficeCtl.lastMtime = 0;
-    nasOfficeCtl.saving = false;
-    nasOfficeCtl.closeAfterSave = false;
-    nasOfficeCtl.opened = false;
-    nasOfficeCtl.noApp = false;
+  function officeDocStatusText(doc) {
+    if (!doc) return "";
+    if (doc.pending && !doc.localPath) return "下载中";
+    if (doc.saving || doc.queued) return "同步中";
+    if (doc.noApp) return "未安装办公软件";
+    if (officeDocDirty(doc)) return "有未同步";
+    if (doc.opened) return "已同步";
+    if (doc.hint) return doc.hint;
+    return "打开中";
   }
 
-  function forceCloseNasOffice() {
+  function renderOfficeDock() {
+    const hasDocs = nasOfficeDocs.length > 0;
+    document.body.classList.toggle("has-office-dock", hasDocs);
+    if (nasOfficeDock) nasOfficeDock.hidden = !hasDocs;
+    if (!nasOfficeDockList) return;
+    if (!hasDocs) {
+      nasOfficeDockList.innerHTML = "";
+      return;
+    }
+    nasOfficeDockList.innerHTML = nasOfficeDocs
+      .map(function (doc) {
+        const dirty = officeDocDirty(doc);
+        const syncing = !!(doc.saving || doc.queued);
+        const cls =
+          "nas-office-chip" +
+          (doc.id === nasOfficeFocusId && nasOfficeEl && !nasOfficeEl.hidden ? " is-active" : "") +
+          (syncing ? " is-syncing" : dirty ? " is-dirty" : "");
+        return (
+          '<div class="' +
+          cls +
+          '" data-id="' +
+          doc.id +
+          '"><div class="nas-office-chip-main"><span class="nas-office-chip-name">' +
+          escapeHtml(doc.name || "文稿") +
+          '</span><span class="nas-office-chip-status">' +
+          escapeHtml(officeDocStatusText(doc)) +
+          '</span></div><button type="button" class="nas-office-chip-close" data-id="' +
+          doc.id +
+          '" aria-label="结束编辑">×</button></div>'
+        );
+      })
+      .join("");
+  }
+
+  function refreshOfficeOverlay(doc) {
+    if (!doc || focusedOfficeDoc() !== doc || !nasOfficeEl || nasOfficeEl.hidden) {
+      renderOfficeDock();
+      return;
+    }
+    if (nasOfficeTitle) nasOfficeTitle.textContent = doc.name || "文稿";
+    if (nasOfficePath) {
+      const dir = doc.path === "/" ? "" : doc.path;
+      nasOfficePath.textContent = dir + "/" + (doc.name || "");
+    }
+    setNasOfficeBusy(!!doc.saving);
+    if (doc.pending && !doc.localPath) {
+      setNasOfficeLoading(true, doc.hint || "正在下载文件…");
+    } else if (doc.saving) {
+      setNasOfficeLoading(true, "正在同步到网盘…");
+    } else {
+      setNasOfficeLoading(false, "");
+      setNasOfficeHint(doc.hint || (officeDocDirty(doc) ? "已保存到本地，正在等待自动同步" : "已同步"));
+      if (nasOfficeGuide) {
+        nasOfficeGuide.hidden = false;
+        nasOfficeGuide.textContent = doc.noApp
+          ? "未检测到 WPS、Office 或 LibreOffice，请先安装办公软件后再打开。"
+          : "已使用系统软件打开。请在办公软件中保存，保存后会自动同步到网盘。";
+      }
+    }
+    renderOfficeDock();
+  }
+
+  function hideNasOfficeOverlay() {
     hideNasOfficeAsk();
     if (nasOfficeEl) nasOfficeEl.hidden = true;
     setNasOfficeHint("");
     setNasOfficeBusy(false);
-    const session = selectedDrive();
-    if (session && isNasOfficeKind(session.nasPreviewKind)) {
-      session.nasPreviewSeq = (session.nasPreviewSeq || 0) + 1;
-      session.nasPreviewName = "";
-      session.nasPreviewKind = "";
-      session.nasPreviewPath = "";
+    renderOfficeDock();
+  }
+
+  function focusOfficeDoc(doc, showOverlay) {
+    if (!doc) return;
+    nasOfficeFocusId = doc.id;
+    if (showOverlay) showNasOfficePanelFor(doc, doc.hint || "", !!(doc.pending && !doc.localPath));
+    else renderOfficeDock();
+  }
+
+  function showNasOfficePanelFor(doc, status, loading) {
+    if (!nasOfficeEl || !doc) return;
+    if (nasPreview) nasPreview.hidden = true;
+    stopNasStreamPump();
+    nasOfficeFocusId = doc.id;
+    if (nasOfficeTitle) nasOfficeTitle.textContent = doc.name || "文稿";
+    if (nasOfficePath) {
+      const dir = doc.path === "/" ? "" : doc.path;
+      nasOfficePath.textContent = dir + "/" + (doc.name || "");
     }
-    resetNasOfficeCtl();
+    hideNasOfficeAsk();
+    setNasOfficeBusy(!!doc.saving);
+    setNasOfficeLoading(!!loading, status || doc.hint || "正在加载文件…");
+    if (!loading) setOfficeDocHint(doc, status || doc.hint);
+    nasOfficeEl.hidden = false;
+    renderOfficeDock();
+  }
+
+  function removeOfficeDoc(doc) {
+    if (!doc) return;
+    clearOfficeDocTimer(doc, "saveTimer");
+    clearOfficeDocTimer(doc, "openTimer");
+    nasOfficeDocs = nasOfficeDocs.filter(function (item) {
+      return item.id !== doc.id;
+    });
+    if (nasOfficeFocusId === doc.id) {
+      nasOfficeFocusId = nasOfficeDocs.length ? nasOfficeDocs[nasOfficeDocs.length - 1].id : 0;
+      hideNasOfficeOverlay();
+    }
+    if (!nasOfficeDocs.length) stopOfficeWatch();
+    renderOfficeDock();
+  }
+
+  function closeOfficeDocsForSession(sessionId) {
+    const sid = Number(sessionId) || 0;
+    nasOfficeDocs.filter(function (item) {
+      return item.sessionId === sid;
+    }).forEach(removeOfficeDoc);
+  }
+
+  function closeAllOfficeDocs() {
+    nasOfficeDocs.slice().forEach(removeOfficeDoc);
+    hideNasOfficeOverlay();
+    stopOfficeWatch();
+  }
+
+  function forceCloseNasOffice() {
+    closeAllOfficeDocs();
   }
 
   function requestNasOfficeExit() {
-    if (!nasOfficeEl || nasOfficeEl.hidden) return;
-    if (nasOfficeCtl.saving) return;
-    hideNasOfficeAsk();
-    if (!nasOfficeCtl.opened || !nasOfficeDirty()) {
-      forceCloseNasOffice();
+    hideNasOfficeOverlay();
+  }
+
+  function requestRemoveOfficeDoc(doc) {
+    if (!doc) return;
+    if (doc.saving) {
+      focusOfficeDoc(doc, true);
+      setOfficeDocHint(doc, "正在同步，请稍候再关闭");
       return;
     }
-    showNasOfficeAsk();
+    if (doc.opened && officeDocDirty(doc)) {
+      focusOfficeDoc(doc, true);
+      showNasOfficeAsk(doc);
+      return;
+    }
+    removeOfficeDoc(doc);
   }
 
-  function showNasOfficePanel(session, status, loading) {
-    if (!nasOfficeEl || !session) return;
-    if (nasPreview) nasPreview.hidden = true;
-    stopNasStreamPump();
-    nasOfficeCtl.sessionId = session.rpcSessionId || 0;
-    if (!nasOfficeCtl.name) {
-      nasOfficeCtl.name = session.nasPreviewName || "";
-      nasOfficeCtl.path = normalizeNasPath(session.nasPreviewPath || session.nasPath || "/");
-    }
-    if (nasOfficeTitle) nasOfficeTitle.textContent = nasOfficeCtl.name || "文稿";
-    if (nasOfficePath) {
-      const dir = nasOfficeCtl.path === "/" ? "" : nasOfficeCtl.path;
-      nasOfficePath.textContent = dir + "/" + (nasOfficeCtl.name || "");
-    }
-    hideNasOfficeAsk();
-    setNasOfficeHint("");
-    setNasOfficeBusy(false);
-    setNasOfficeLoading(!!loading, status || "正在加载文件…");
-    nasOfficeEl.hidden = false;
-  }
-
-  function applyNasOfficeStat(stat, asOriginal) {
+  function applyOfficeDocStat(doc, stat, asOriginal) {
+    if (!doc) return;
     const size = Number(stat && stat.size) || 0;
     const mtime = Number(stat && stat.modifiedMs) || 0;
-    nasOfficeCtl.lastSize = size;
-    nasOfficeCtl.lastMtime = mtime;
+    if (size !== Number(doc.lastSize) || mtime !== Number(doc.lastMtime)) {
+      doc.changedAt = Date.now();
+    }
+    doc.lastSize = size;
+    doc.lastMtime = mtime;
     if (asOriginal) {
-      nasOfficeCtl.origSize = size;
-      nasOfficeCtl.origMtime = mtime;
+      doc.origSize = size;
+      doc.origMtime = mtime;
+      doc.changedAt = Date.now();
     }
   }
 
-  function startNasOfficeWatch() {
-    if (nasOfficeCtl.watchTimer) {
-      window.clearTimeout(nasOfficeCtl.watchTimer);
-      nasOfficeCtl.watchTimer = 0;
-    }
+  function ensureOfficeWatch() {
+    if (nasOfficeWatchTimer) return;
     function tick() {
-      if (!nasOfficeEl || nasOfficeEl.hidden || !nasOfficeCtl.localPath) return;
-      tauriInvoke("file_stat", { path: nasOfficeCtl.localPath })
-        .then(function (stat) {
-          if (!nasOfficeEl || nasOfficeEl.hidden) return;
-          applyNasOfficeStat(stat, false);
-          if (nasOfficeCtl.saving || nasOfficeCtl.noApp) return;
-          setNasOfficeHint(nasOfficeDirty() ? "文件已修改，可以同步到网盘" : "没有修改");
-        })
-        .catch(function () {});
-      nasOfficeCtl.watchTimer = window.setTimeout(tick, 1500);
+      if (!nasOfficeDocs.length) {
+        nasOfficeWatchTimer = 0;
+        return;
+      }
+      nasOfficeDocs.forEach(pollOfficeDoc);
+      pumpOfficeDownload();
+      pumpOfficeSync();
+      nasOfficeWatchTimer = window.setTimeout(tick, 1500);
     }
     tick();
   }
 
-  function openNasOfficeFromPath(session, localPath) {
-    if (!session || !localPath) {
-      setNasOfficeLoading(false, "无法打开，请稍后重试");
+  function stopOfficeWatch() {
+    if (!nasOfficeWatchTimer) return;
+    window.clearTimeout(nasOfficeWatchTimer);
+    nasOfficeWatchTimer = 0;
+  }
+
+  function pollOfficeDoc(doc) {
+    if (!doc || !doc.localPath || doc.noApp) return;
+    tauriInvoke("file_stat", { path: doc.localPath })
+      .then(function (stat) {
+        if (!findOfficeDocById(doc.id)) return;
+        applyOfficeDocStat(doc, stat, false);
+        if (doc.saving || doc.noApp) return;
+        if (officeDocDirty(doc)) {
+          const stable = doc.changedAt && Date.now() - doc.changedAt >= NAS_OFFICE_STABLE_MS;
+          setOfficeDocHint(doc, stable ? "已保存到本地，正在自动同步" : "已保存到本地，等待写入完成");
+          if (stable) queueOfficeSync(doc, false, false);
+        } else if (!doc.queued) {
+          setOfficeDocHint(doc, "已同步");
+        }
+        refreshOfficeOverlay(doc);
+      })
+      .catch(function () {});
+  }
+
+  function pumpOfficeDownload() {
+    nasOfficeDocs.forEach(function (doc) {
+      if (!doc.pending || doc.localPath || doc.downloadStarted) return;
+      if (officeSessionBusy(doc.sessionId, doc.id)) return;
+      startOfficeDownload(doc);
+    });
+  }
+
+  function startOfficeDownload(doc) {
+    if (!doc || doc.downloadStarted || doc.localPath) return;
+    const drive = findDriveByRpc(doc.sessionId);
+    if (!drive) {
+      setOfficeDocHint(doc, "网盘未连接");
+      refreshOfficeOverlay(doc);
       return;
     }
-    if (!nasOfficeEl || nasOfficeEl.hidden) {
-      showNasOfficePanel(session, "正在打开文件…", true);
-    } else {
-      setNasOfficeLoading(true, "正在打开文件…");
-    }
-    nasOfficeCtl.localPath = localPath;
-    tauriInvoke("file_stat", { path: localPath })
-      .then(function (stat) {
-        applyNasOfficeStat(stat, true);
-        return tauriInvoke("office_open_file", { path: localPath });
-      })
-      .then(function () {
-        nasOfficeCtl.opened = true;
-        nasOfficeCtl.noApp = false;
-        setNasOfficeLoading(false, "");
-        setNasOfficeHint("没有修改");
-        if (nasOfficeGuide) {
-          nasOfficeGuide.hidden = false;
-          nasOfficeGuide.textContent =
-            "已使用系统软件打开。请在办公软件中保存修改后，回到这里点击「同步到网盘」。";
-        }
-        startNasOfficeWatch();
-      })
-      .catch(function (err) {
-        const msg = String((err && err.message) || err || "");
-        nasOfficeCtl.opened = false;
-        if (msg.indexOf("no-office-app") >= 0) {
-          nasOfficeCtl.noApp = true;
-          setNasOfficeLoading(false, "");
-          setNasOfficeHint("请安装办公软件");
-          if (nasOfficeGuide) {
-            nasOfficeGuide.hidden = false;
-            nasOfficeGuide.textContent = "未检测到 WPS、Office 或 LibreOffice，请先安装办公软件后再打开。";
-          }
+    doc.downloadStarted = true;
+    clearOfficeDocTimer(doc, "openTimer");
+    doc.openTimer = window.setTimeout(function () {
+      if (!findOfficeDocById(doc.id) || doc.opened || doc.localPath) return;
+      doc.downloadStarted = false;
+      setOfficeDocHint(doc, "打开超时");
+      showNasOfficePanelFor(doc, "打开超时", false);
+      renderOfficeDock();
+    }, 90000);
+    tauriInvoke("nas_get_file", {
+      sessionId: doc.sessionId,
+      fileName: doc.name,
+      filePath: doc.path,
+      size: null,
+    })
+      .then(function (result) {
+        if (!findOfficeDocById(doc.id)) return;
+        if (result && result.busy) {
+          doc.downloadStarted = false;
+          setOfficeDocHint(doc, "有文件正在传输，请稍候");
+          refreshOfficeOverlay(doc);
           return;
         }
-        setNasOfficeLoading(false, "无法打开，请稍后重试");
+        if (result && result.cached && result.localPath) {
+          openNasOfficeFromPath(doc, result.localPath);
+        }
+      })
+      .catch(function () {
+        if (!findOfficeDocById(doc.id)) return;
+        doc.downloadStarted = false;
+        doc.pending = false;
+        setOfficeDocHint(doc, "无法打开，请稍后重试");
+        refreshOfficeOverlay(doc);
       });
   }
 
-  function syncNasOffice(thenClose) {
-    if (!nasOfficeEl || nasOfficeEl.hidden || nasOfficeCtl.saving) return;
-    hideNasOfficeAsk();
-    if (nasOfficeCtl.noApp) {
-      setNasOfficeHint("请安装办公软件");
-      if (thenClose) forceCloseNasOffice();
+  function reopenOfficeDoc(doc) {
+    if (!doc) return;
+    focusOfficeDoc(doc, true);
+    if (doc.opened && doc.localPath) {
+      tauriInvoke("office_open_file", { path: doc.localPath }).catch(function () {});
+      refreshOfficeOverlay(doc);
       return;
     }
-    if (!nasOfficeCtl.opened) {
-      setNasOfficeHint("文件还在加载");
+    if (doc.localPath) {
+      openNasOfficeFromPath(doc, doc.localPath);
       return;
     }
-    if (!nasOfficeDirty()) {
-      setNasOfficeHint("没有修改");
-      if (thenClose) forceCloseNasOffice();
+    showNasOfficePanelFor(doc, doc.hint || "正在下载文件…", !!doc.pending);
+  }
+
+  function openNasOfficeFromPath(doc, localPath) {
+    if (!doc || !localPath) {
+      setNasOfficeLoading(false, "无法打开，请稍后重试");
       return;
     }
-    if (!nasOfficeCtl.sessionId || !nasOfficeCtl.localPath || !nasOfficeCtl.name) {
-      setNasOfficeHint("同步失败");
-      return;
+    clearOfficeDocTimer(doc, "openTimer");
+    doc.localPath = localPath;
+    doc.pending = false;
+    doc.downloadStarted = false;
+    if (focusedOfficeDoc() === doc) {
+      showNasOfficePanelFor(doc, "正在打开文件…", true);
     }
-    if (driveHasRunningTask(findDriveByRpc(nasOfficeCtl.sessionId))) {
-      setNasOfficeHint("有传输任务进行中，请稍候再同步");
-      return;
-    }
-    nasOfficeCtl.saving = true;
-    nasOfficeCtl.closeAfterSave = !!thenClose;
-    setNasOfficeBusy(true);
-    setNasOfficeLoading(true, "正在同步到网盘…");
-    setNasOfficeHint("正在同步到网盘…");
-    clearNasOfficeTimers();
-    nasOfficeCtl.saveTimer = window.setTimeout(function () {
-      if (!nasOfficeCtl.saving) return;
-      nasOfficeCtl.saving = false;
-      nasOfficeCtl.closeAfterSave = false;
-      setNasOfficeBusy(false);
-      setNasOfficeLoading(false, "");
-      setNasOfficeHint("同步超时");
-      startNasOfficeWatch();
-    }, 120000);
-    tauriInvoke("office_file_busy", { path: nasOfficeCtl.localPath })
-      .then(function (busy) {
-        if (busy) {
-          throw new Error("file-busy");
-        }
-        return tauriInvoke("nas_put_file", {
-          sessionId: nasOfficeCtl.sessionId,
-          fileName: nasOfficeCtl.name,
-          filePath: nasOfficeCtl.path,
-          localPath: nasOfficeCtl.localPath,
-        });
+    tauriInvoke("file_stat", { path: localPath })
+      .then(function (stat) {
+        applyOfficeDocStat(doc, stat, true);
+        return tauriInvoke("office_open_file", { path: localPath });
+      })
+      .then(function () {
+        if (!findOfficeDocById(doc.id)) return;
+        doc.opened = true;
+        doc.noApp = false;
+        setOfficeDocHint(doc, "已同步");
+        ensureOfficeWatch();
+        refreshOfficeOverlay(doc);
+        pumpOfficeDownload();
       })
       .catch(function (err) {
         const msg = String((err && err.message) || err || "");
-        clearNasOfficeTimers();
-        nasOfficeCtl.saving = false;
-        nasOfficeCtl.closeAfterSave = false;
-        setNasOfficeBusy(false);
-        setNasOfficeLoading(false, "");
-        if (msg.indexOf("file-busy") >= 0) {
-          setNasOfficeHint("请先关闭办公软件再同步");
-        } else {
-          setNasOfficeHint("同步失败");
+        doc.opened = false;
+        if (msg.indexOf("no-office-app") >= 0) {
+          doc.noApp = true;
+          setOfficeDocHint(doc, "请安装办公软件");
+          refreshOfficeOverlay(doc);
+          return;
         }
-        startNasOfficeWatch();
+        setOfficeDocHint(doc, "无法打开，请稍后重试");
+        refreshOfficeOverlay(doc);
+      });
+  }
+
+  function queueOfficeSync(doc, thenClose, immediate) {
+    if (!doc) return;
+    hideNasOfficeAsk();
+    if (doc.noApp) {
+      setOfficeDocHint(doc, "请安装办公软件");
+      if (thenClose) removeOfficeDoc(doc);
+      return;
+    }
+    if (!doc.opened) {
+      setOfficeDocHint(doc, "文件还在加载");
+      refreshOfficeOverlay(doc);
+      return;
+    }
+    if (!officeDocDirty(doc)) {
+      setOfficeDocHint(doc, "没有修改");
+      if (thenClose) removeOfficeDoc(doc);
+      else refreshOfficeOverlay(doc);
+      return;
+    }
+    doc.closeAfterSave = !!thenClose || doc.closeAfterSave;
+    doc.queued = true;
+    if (immediate) doc.changedAt = Date.now() - NAS_OFFICE_STABLE_MS;
+    refreshOfficeOverlay(doc);
+    pumpOfficeSync();
+  }
+
+  function pumpOfficeSync() {
+    const doc = nasOfficeDocs.find(function (item) {
+      if (!item.queued || item.saving || !item.opened || item.noApp) return false;
+      if (!officeDocDirty(item) && !item.closeAfterSave) {
+        item.queued = false;
+        return false;
+      }
+      return !officeSessionBusy(item.sessionId, item.id);
+    });
+    if (!doc) return;
+    startOfficeSync(doc);
+  }
+
+  function startOfficeSync(doc) {
+    if (!doc || doc.saving) return;
+    if (!doc.sessionId || !doc.localPath || !doc.name) {
+      doc.queued = false;
+      setOfficeDocHint(doc, "同步失败");
+      refreshOfficeOverlay(doc);
+      return;
+    }
+    doc.saving = true;
+    doc.queued = false;
+    doc.syncSize = doc.lastSize;
+    doc.syncMtime = doc.lastMtime;
+    clearOfficeDocTimer(doc, "saveTimer");
+    doc.saveTimer = window.setTimeout(function () {
+      if (!findOfficeDocById(doc.id) || !doc.saving) return;
+      doc.saving = false;
+      doc.queued = true;
+      setOfficeDocHint(doc, "同步超时，将重试");
+      refreshOfficeOverlay(doc);
+      pumpOfficeSync();
+    }, 120000);
+    setOfficeDocHint(doc, "正在同步到网盘…");
+    refreshOfficeOverlay(doc);
+    tauriInvoke("office_snapshot_file", { path: doc.localPath })
+      .then(function (snapPath) {
+        if (!snapPath) throw new Error("snapshot-empty");
+        return tauriInvoke("nas_put_file", {
+          sessionId: doc.sessionId,
+          fileName: doc.name,
+          filePath: doc.path,
+          localPath: snapPath,
+        });
+      })
+      .catch(function () {
+        if (!findOfficeDocById(doc.id)) return;
+        clearOfficeDocTimer(doc, "saveTimer");
+        doc.saving = false;
+        doc.queued = true;
+        setOfficeDocHint(doc, "文件正在写入，稍后自动同步");
+        refreshOfficeOverlay(doc);
+        window.setTimeout(pumpOfficeSync, 4000);
       });
   }
 
   function onNasOfficePut(payload) {
+    const sid = Number(payload.sessionId) || 0;
     const name = String(payload.fileName || "");
     const dir = normalizeNasPath(payload.filePath || "/");
-    if (name && nasOfficeCtl.name && name !== nasOfficeCtl.name) return;
-    if (dir !== nasOfficeCtl.path) return;
-    clearNasOfficeTimers();
-    nasOfficeCtl.saving = false;
-    setNasOfficeBusy(false);
-    setNasOfficeLoading(false, "");
-    if (!payload.ok) {
-      nasOfficeCtl.closeAfterSave = false;
-      setNasOfficeHint("请先关闭办公软件再同步");
-      startNasOfficeWatch();
-      return;
-    }
-    nasOfficeCtl.origSize = nasOfficeCtl.lastSize;
-    nasOfficeCtl.origMtime = nasOfficeCtl.lastMtime;
-    setNasOfficeHint("已同步");
-    const drive = state.drives.find(function (item) {
-      return item.rpcSessionId === nasOfficeCtl.sessionId;
+    const doc = nasOfficeDocs.find(function (item) {
+      return item.saving && item.sessionId === sid && item.name === name && item.path === dir;
     });
+    if (!doc) return false;
+    clearOfficeDocTimer(doc, "saveTimer");
+    doc.saving = false;
+    if (!payload.ok) {
+      doc.queued = true;
+      setOfficeDocHint(doc, "网盘忙，稍后自动同步");
+      refreshOfficeOverlay(doc);
+      window.setTimeout(pumpOfficeSync, 2500);
+      return true;
+    }
+    doc.origSize = doc.syncSize;
+    doc.origMtime = doc.syncMtime;
+    const drive = findDriveByRpc(doc.sessionId);
     if (drive && normalizeNasPath(drive.nasPath || "/") === dir) {
       requestNasPath(drive, drive.nasPath);
     }
-    if (nasOfficeCtl.closeAfterSave) {
-      nasOfficeCtl.closeAfterSave = false;
-      tauriInvoke("file_stat", { path: nasOfficeCtl.localPath })
-        .then(function (stat) {
-          applyNasOfficeStat(stat, false);
-          if (nasOfficeDirty()) showNasOfficeAsk();
-          else forceCloseNasOffice();
-        })
-        .catch(function () {
-          forceCloseNasOffice();
-        });
-      return;
+    const finish = function () {
+      if (!findOfficeDocById(doc.id)) return;
+      if (officeDocDirty(doc)) {
+        queueOfficeSync(doc, doc.closeAfterSave, false);
+        return;
+      }
+      setOfficeDocHint(doc, "已同步");
+      if (doc.closeAfterSave) {
+        doc.closeAfterSave = false;
+        removeOfficeDoc(doc);
+        return;
+      }
+      refreshOfficeOverlay(doc);
+      pumpOfficeSync();
+      pumpOfficeDownload();
+    };
+    if (!doc.localPath) {
+      finish();
+      return true;
     }
-    startNasOfficeWatch();
+    tauriInvoke("file_stat", { path: doc.localPath })
+      .then(function (stat) {
+        applyOfficeDocStat(doc, stat, false);
+        finish();
+      })
+      .catch(function () {
+        finish();
+      });
+    return true;
+  }
+
+  function flushOfficeDocsThen(done) {
+    nasOfficeDocs.forEach(function (doc) {
+      if (doc.opened && !doc.noApp && officeDocDirty(doc)) doc.queued = true;
+    });
+    pumpOfficeSync();
+    let n = 0;
+    function tick() {
+      n += 1;
+      const busy = nasOfficeDocs.some(function (doc) {
+        return doc.saving;
+      });
+      const queued = nasOfficeDocs.some(function (doc) {
+        return doc.queued && officeDocDirty(doc) && doc.opened;
+      });
+      if ((!busy && !queued) || n >= 16) {
+        if (typeof done === "function") done();
+        return;
+      }
+      if (!busy) pumpOfficeSync();
+      window.setTimeout(tick, 500);
+    }
+    tick();
   }
 
   function nasEditorDirty() {
@@ -5752,13 +6073,10 @@
   }
 
   function onNasPut(payload) {
+    if (onNasOfficePut(payload)) return;
     const sid = Number(payload.sessionId) || 0;
     const name = String(payload.fileName || "");
     const dir = normalizeNasPath(payload.filePath || "/");
-    if (nasOfficeEl && !nasOfficeEl.hidden && sid && sid === nasOfficeCtl.sessionId) {
-      onNasOfficePut(payload);
-      return;
-    }
     if (!sid || sid !== nasEditorCtl.sessionId) return;
     if (name && nasEditorCtl.name && name !== nasEditorCtl.name) return;
     if (dir !== nasEditorCtl.path) return;

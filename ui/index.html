@@ -555,22 +555,28 @@
           <div class="nas-preview-spinner" id="nas-office-spinner" aria-hidden="true"></div>
           <p id="nas-office-status">正在加载文件…</p>
         </div>
-        <p class="nas-office-guide" id="nas-office-guide" hidden>已使用系统软件打开。请在办公软件中保存修改后，回到这里点击「同步到网盘」。</p>
+        <p class="nas-office-guide" id="nas-office-guide" hidden>已使用系统软件打开。请在办公软件中保存，保存后会自动同步到网盘。</p>
       </div>
       <footer class="nas-editor-foot">
-        <button type="button" class="btn-ghost" id="nas-office-exit">退出</button>
-        <button type="button" class="btn-primary" id="nas-office-sync">同步到网盘</button>
+        <button type="button" class="btn-ghost" id="nas-office-exit">回到网盘</button>
+        <button type="button" class="btn-primary" id="nas-office-sync">立即同步</button>
       </footer>
     </div>
     <div class="nas-editor-ask" id="nas-office-ask" hidden>
       <div class="nas-editor-ask-card">
-        <p>文件已修改，是否同步到网盘？</p>
+        <p>文件已修改，结束编辑前是否同步到网盘？</p>
         <div class="nas-editor-ask-actions">
           <button type="button" class="btn-ghost" id="nas-office-ask-cancel">取消</button>
           <button type="button" class="btn-ghost" id="nas-office-ask-discard">不同步</button>
           <button type="button" class="btn-primary" id="nas-office-ask-sync">同步</button>
         </div>
       </div>
+    </div>
+  </div>
+  <div class="nas-office-dock" id="nas-office-dock" hidden>
+    <div class="nas-office-dock-inner">
+      <p class="nas-office-dock-label">正在编辑</p>
+      <div class="nas-office-dock-list" id="nas-office-dock-list"></div>
     </div>
   </div>
   <div class="nas-editor" id="nas-editor" hidden>
