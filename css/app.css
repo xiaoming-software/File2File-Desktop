@@ -423,6 +423,42 @@ html.is-tauri .titlebar {
   max-width: 360px;
 }
 
+.lang-switch {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f4f5f7;
+  flex-shrink: 0;
+}
+
+.lang-switch-btn {
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.lang-switch-btn.is-on {
+  background: #fff;
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.08);
+}
+
+.form-lang-switch {
+  margin-top: 18px;
+}
+
+.account-bar .lang-switch {
+  margin-left: auto;
+}
+
 .form-title {
   font-size: 26px;
   font-weight: 700;
@@ -544,7 +580,7 @@ html.is-tauri .titlebar {
 .token-dropdown-pick {
   flex: 1;
   min-width: 0;
-  height: 32px;
+  min-height: 32px;
   padding: 0 8px;
   border: 0;
   border-radius: 4px;
@@ -553,9 +589,36 @@ html.is-tauri .titlebar {
   font-size: 12.5px;
   text-align: left;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.token-dropdown-token {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 600;
+}
+
+.token-dropdown-remark {
+  flex-shrink: 1;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.token-dropdown-remark::before {
+  content: "·";
+  margin-right: 4px;
+  color: #cbd5e1;
 }
 
 .token-dropdown-pick:hover {
@@ -670,6 +733,192 @@ html.is-tauri .titlebar {
   text-decoration: underline;
 }
 
+.btn-quick-register {
+  width: 100%;
+  margin-top: 10px;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-quick-register:hover:not(:disabled) {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+
+.btn-quick-register:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.register-progress-steps {
+  list-style: none;
+  margin: 16px 0 12px;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.register-progress-steps li {
+  position: relative;
+  padding: 8px 10px 8px 28px;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.register-progress-steps li::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  margin-top: -4px;
+  border-radius: 50%;
+  background: #cbd5e1;
+}
+
+.register-progress-steps li.is-active {
+  color: var(--text);
+  background: #eff6ff;
+}
+
+.register-progress-steps li.is-active::before {
+  background: var(--accent);
+}
+
+.register-progress-steps li.is-done {
+  color: var(--text);
+}
+
+.register-progress-steps li.is-done::before {
+  background: #22c55e;
+}
+
+.register-progress-spinner[hidden] {
+  display: none;
+}
+
+.register-success-panel {
+  margin-top: 4px;
+}
+
+.register-success-desc {
+  margin: 0 0 14px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.register-success-meta {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+}
+
+.register-success-row {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 8px;
+  align-items: start;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.register-success-row + .register-success-row {
+  margin-top: 8px;
+}
+
+.register-success-row dt {
+  margin: 0;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.register-success-row dd {
+  margin: 0;
+  word-break: break-all;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.register-progress-spinner {
+  width: 28px;
+  height: 28px;
+  margin: 8px auto 0;
+  border: 3px solid #e2e8f0;
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: register-spin 0.8s linear infinite;
+}
+
+@keyframes register-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.account-renew-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  background: #fff7ed;
+  border-bottom: 1px solid #fed7aa;
+  color: #9a3412;
+}
+
+.account-renew-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.account-renew-btn {
+  flex-shrink: 0;
+  min-height: 32px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 6px;
+  background: #ea580c;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.account-renew-btn:hover {
+  background: #c2410c;
+}
+
+.account-value.is-expiry-warn {
+  color: #ea580c;
+  font-weight: 600;
+}
+
+.account-remark-value {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.account-remark-value:hover {
+  color: var(--accent);
+}
+
 .login-error {
   margin-top: 12px;
   padding: 8px 10px;
@@ -725,6 +974,42 @@ html.is-tauri .titlebar {
   color: var(--text);
 }
 
+.account-token-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.account-item-token .account-value {
+  flex: 1;
+  min-width: 0;
+  max-width: 132px;
+}
+
+.btn-manage-token {
+  flex-shrink: 0;
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-manage-token:hover:not(:disabled) {
+  background: #dbeafe;
+}
+
+.btn-manage-token:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 .account-status {
   display: flex;
   align-items: center;
@@ -746,7 +1031,7 @@ html.is-tauri .titlebar {
 }
 
 .btn-logout {
-  margin-left: auto;
+  margin-left: 10px;
   height: 30px;
   padding: 0 12px;
   border: 1px solid #ead2d5;

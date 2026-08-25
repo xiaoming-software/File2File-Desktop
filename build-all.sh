@@ -37,6 +37,7 @@ prepare_frontend() {
   cp -f "${PROJECT_ROOT}/css/app.css" "${ui_dir}/css/app.css"
   cp -f "${PROJECT_ROOT}/css/screenshot.css" "${ui_dir}/css/screenshot.css"
   cp -f "${PROJECT_ROOT}/js/app.js" "${ui_dir}/js/app.js"
+  cp -f "${PROJECT_ROOT}/js/i18n.js" "${ui_dir}/js/i18n.js"
   cp -f "${PROJECT_ROOT}/js/screenshot.js" "${ui_dir}/js/screenshot.js"
   if [[ -f "${PROJECT_ROOT}/assets/file2file_logo.png" ]]; then
     cp -f "${PROJECT_ROOT}/assets/file2file_logo.png" "${ui_dir}/assets/file2file_logo.png"

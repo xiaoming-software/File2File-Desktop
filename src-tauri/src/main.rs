@@ -11,6 +11,7 @@ mod screenshot;
 mod storage;
 mod desktop;
 mod voice;
+mod portal;
 mod webrpc;
 
 #[cfg(target_os = "windows")]
@@ -61,6 +62,12 @@ fn main() {
             accounts::saved_accounts_list,
             accounts::saved_accounts_upsert,
             accounts::saved_accounts_delete,
+            accounts::saved_accounts_update_remark,
+            portal::webrpc_auto_register,
+            portal::portal_link_get,
+            portal::portal_link_save,
+            portal::portal_refresh_expiry,
+            portal::portal_open_console,
             sessions::saved_sessions_list,
             sessions::saved_sessions_create,
             sessions::saved_sessions_update,

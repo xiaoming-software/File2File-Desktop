@@ -22,6 +22,7 @@ base64 = "0.22"
 aec3 = "0.3"
 openh264 = { version = "0.8.1", features = ["source"] }
 enigo = "0.3"
+ureq = { version = "2", features = ["json"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

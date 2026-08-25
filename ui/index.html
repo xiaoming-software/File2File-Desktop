@@ -29,7 +29,7 @@
       </header>
 
       <main class="app-body">
-        <section class="page page-login is-active" id="page-login" aria-label="登录">
+        <section class="page page-login is-active" id="page-login" data-i18n-aria="登录" aria-label="登录">
           <aside class="brand-pane">
             <div class="brand-pane-inner">
               <img
@@ -37,20 +37,20 @@
                 src="assets/file2file_logo.png"
                 alt="File2File"
               />
-              <p class="brand-tagline">安全直连，传文件、管网盘、控桌面</p>
+              <p class="brand-tagline" data-i18n="安全直连，传文件、管网盘、控桌面">安全直连，传文件、管网盘、控桌面</p>
               <ul class="brand-points">
-                <li>点对点传输大文件</li>
-                <li>访问自己的个人网盘</li>
-                <li>远程控制 Windows 电脑</li>
+                <li data-i18n="点对点传输大文件">点对点传输大文件</li>
+                <li data-i18n="访问自己的个人网盘">访问自己的个人网盘</li>
+                <li data-i18n="远程控制 Windows 电脑">远程控制 Windows 电脑</li>
               </ul>
-              <p class="brand-slogan">无需公网 IP，数据不经过第三方网盘</p>
+              <p class="brand-slogan" data-i18n="无需公网 IP，数据不经过第三方网盘">无需公网 IP，数据不经过第三方网盘</p>
             </div>
           </aside>
 
           <div class="form-pane">
             <div class="form-pane-inner">
-              <h1 class="form-title">登录</h1>
-              <p class="form-subtitle">请输入 Token 与密码以连接 webrpc 网络</p>
+              <h1 class="form-title" data-i18n="登录">登录</h1>
+              <p class="form-subtitle" data-i18n="请输入 Token 与密码以连接 webrpc 网络">请输入 Token 与密码以连接 webrpc 网络</p>
 
               <form id="login-form" autocomplete="off" novalidate>
                 <div class="field token-field">
@@ -61,7 +61,7 @@
                       name="token"
                       type="text"
                       spellcheck="false"
-                      placeholder="请输入 Token"
+                      data-i18n-placeholder="请输入 Token" placeholder="请输入 Token"
                       maxlength="256"
                       autocomplete="off"
                     />
@@ -69,9 +69,10 @@
                       class="ghost-btn"
                       type="button"
                       id="token-cache-btn"
-                      aria-label="选择已保存的 Token"
+                      data-i18n-aria="选择已保存的 Token" aria-label="选择已保存的 Token"
                       aria-haspopup="listbox"
                       aria-expanded="false"
+                      data-i18n="选择"
                     >
                       选择
                     </button>
@@ -82,20 +83,21 @@
                 </div>
 
                 <div class="field">
-                  <label for="password">密码</label>
+                  <label for="password" data-i18n="密码">密码</label>
                   <div class="input-wrap">
                     <input
                       id="password"
                       name="password"
                       type="password"
-                      placeholder="请输入密码"
+                      data-i18n-placeholder="请输入密码" placeholder="请输入密码"
                       maxlength="128"
                     />
                     <button
                       class="ghost-btn"
                       type="button"
                       id="toggle-password"
-                      aria-label="显示密码"
+                      data-i18n-aria="显示密码" aria-label="显示密码"
+                      data-i18n="显示"
                     >
                       显示
                     </button>
@@ -103,20 +105,21 @@
                 </div>
 
                 <div class="field">
-                  <label for="passphrase">认证口令</label>
+                  <label for="passphrase" data-i18n="认证口令">认证口令</label>
                   <div class="input-wrap">
                     <input
                       id="passphrase"
                       name="passphrase"
                       type="password"
-                      placeholder="请输入认证口令（可留空）"
+                      data-i18n-placeholder="请输入认证口令（可留空）" placeholder="请输入认证口令（可留空）"
                       maxlength="128"
                     />
                     <button
                       class="ghost-btn"
                       type="button"
                       id="toggle-passphrase"
-                      aria-label="显示认证口令"
+                      data-i18n-aria="显示认证口令" aria-label="显示认证口令"
+                      data-i18n="显示"
                     >
                       显示
                     </button>
@@ -126,59 +129,91 @@
                 <label class="check-row" for="save-token">
                   <input id="save-token" type="checkbox" />
                   <span class="check-box" aria-hidden="true"></span>
-                  <span>保存 Token</span>
+                  <span data-i18n="保存 Token">保存 Token</span>
                 </label>
 
-                <button class="btn-login" id="btn-login" type="submit">登录</button>
+                <button class="btn-login" id="btn-login" type="submit" data-i18n="登录">登录</button>
 
-                <p class="token-hint">
+                <button class="btn-quick-register" id="btn-quick-register" type="button" data-i18n="一键注册">
+                  一键注册
+                </button>
+
+                <p class="token-hint" data-i18n-html="点击 {link} 获取 token">
                   点击
                   <a href="https://webrpc.cn" target="_blank" rel="noopener noreferrer">https://webrpc.cn</a>
                   获取 token
                 </p>
 
-                <p class="login-error" id="login-error" hidden>
+                <p class="login-error" id="login-error" hidden data-i18n="登陆失败,请检查网络或者token与密码是否正确">
                   登陆失败,请检查网络或者token与密码是否正确
                 </p>
               </form>
+              <div class="lang-switch form-lang-switch" role="group" aria-label="Language">
+                <button type="button" class="lang-switch-btn" data-lang="zh">中文</button>
+                <button type="button" class="lang-switch-btn" data-lang="en">English</button>
+              </div>
             </div>
           </div>
         </section>
 
-        <section class="page page-sessions" id="page-sessions" aria-label="会话管理" hidden>
+        <section class="page page-sessions" id="page-sessions" data-i18n-aria="会话管理" aria-label="会话管理" hidden>
           <header class="account-bar">
-            <div class="account-item">
+            <div class="account-item account-item-token">
               <span class="account-label">Token</span>
-              <span class="account-value" id="info-token" title="">—</span>
+              <div class="account-token-row">
+                <span class="account-value" id="info-token" title="">—</span>
+                <button
+                  class="btn-manage-token"
+                  id="btn-manage-token"
+                  type="button"
+                  hidden
+                  data-i18n="管理 Token"
+                >
+                  管理 Token
+                </button>
+              </div>
             </div>
             <div class="account-item">
-              <span class="account-label">口令</span>
-              <span class="account-value" id="info-passphrase">未设置</span>
+              <span class="account-label" data-i18n="口令">口令</span>
+              <span class="account-value" id="info-passphrase" data-i18n="未设置">未设置</span>
+            </div>
+            <div class="account-item account-item-account-remark">
+              <span class="account-label" data-i18n="账号备注">账号备注</span>
+              <button type="button" class="account-value account-remark-value" id="info-account-remark" data-i18n="未设置">未设置</button>
             </div>
             <div class="account-item">
-              <span class="account-label">登录时间</span>
-              <span class="account-value" id="info-login-time">—</span>
-            </div>
-            <div class="account-item">
-              <span class="account-label">登录状态</span>
+              <span class="account-label" data-i18n="登录状态">登录状态</span>
               <span class="account-value account-status">
                 <i class="status-dot is-on" aria-hidden="true"></i>
-                <span id="info-login-status">已登录</span>
+                <span id="info-login-status" data-i18n="已登录">已登录</span>
               </span>
             </div>
+            <div class="account-item" id="account-item-token-expiry" hidden>
+              <span class="account-label" data-i18n="Token 过期时间">Token 过期时间</span>
+              <span class="account-value" id="info-token-expiry">—</span>
+            </div>
             <div class="account-item">
-              <span class="account-label">当前连接会话</span>
+              <span class="account-label" data-i18n="当前连接会话">当前连接会话</span>
               <span class="account-value" id="info-session-count">0</span>
             </div>
-            <button class="btn-logout" id="btn-logout" type="button">退出登录</button>
+            <div class="lang-switch" role="group" aria-label="Language">
+              <button type="button" class="lang-switch-btn" data-lang="zh">中文</button>
+              <button type="button" class="lang-switch-btn" data-lang="en">English</button>
+            </div>
+            <button class="btn-logout" id="btn-logout" type="button" data-i18n="退出登录">退出登录</button>
           </header>
+
+          <div class="account-renew-banner" id="account-renew-banner" hidden>
+            <p class="account-renew-text" id="account-renew-text"></p>
+            <button class="account-renew-btn" id="account-renew-btn" type="button" data-i18n="续费">续费</button>
+          </div>
 
           <div class="workspace">
             <aside class="session-pane" id="session-pane">
-              <section class="session-section is-chat" id="session-section-chat" aria-label="聊天会话">
+              <section class="session-section is-chat" id="session-section-chat" data-i18n-aria="聊天会话" aria-label="聊天会话">
                 <div class="session-pane-head">
-                  <h2>聊天会话</h2>
-                  <button class="btn-new-session" id="btn-new-session" type="button">新建会话</button>
+                  <h2 data-i18n="聊天会话">聊天会话</h2>
+                  <button class="btn-new-session" id="btn-new-session" type="button" data-i18n="新建会话">新建会话</button>
                 </div>
                 <div class="session-list" id="session-list"></div>
               </section>
@@ -187,13 +222,13 @@
                 id="session-split"
                 role="separator"
                 aria-orientation="horizontal"
-                aria-label="拖动调整聊天会话与网盘区域高度"
-                title="拖动调整高度"
+                data-i18n-aria="拖动调整聊天会话与网盘区域高度" aria-label="拖动调整聊天会话与网盘区域高度"
+                data-i18n-title="拖动调整高度" title="拖动调整高度"
               ></div>
-              <section class="session-section is-drive" id="session-section-drive" aria-label="网盘连接">
+              <section class="session-section is-drive" id="session-section-drive" data-i18n-aria="网盘连接" aria-label="网盘连接">
                 <div class="session-pane-head">
-                  <h2>网盘连接</h2>
-                  <button class="btn-new-session" id="btn-new-drive" type="button">新建连接</button>
+                  <h2 data-i18n="网盘连接">网盘连接</h2>
+                  <button class="btn-new-session" id="btn-new-drive" type="button" data-i18n="新建连接">新建连接</button>
                 </div>
                 <div class="session-list" id="drive-list"></div>
               </section>
@@ -202,8 +237,8 @@
             <section class="chat-pane" id="chat-pane">
               <div class="chat-panel" id="panel-unselected">
                 <div class="sessions-empty-icon" aria-hidden="true"></div>
-                <h2>未选择</h2>
-                <p>在左侧选择一个聊天会话或网盘，或点击「新建会话」「新建连接」。</p>
+                <h2 data-i18n="未选择">未选择</h2>
+                <p data-i18n="在左侧选择一个聊天会话或网盘，或点击「新建会话」「新建连接」。">在左侧选择一个聊天会话或网盘，或点击「新建会话」「新建连接」。</p>
               </div>
 
               <div class="chat-panel connect-panel" id="panel-connect">
@@ -212,31 +247,32 @@
                     <span class="chat-glyph"></span>
                     <span class="drive-glyph"></span>
                   </div>
-                  <h2 id="connect-title">请先建立 P2P 连接</h2>
-                  <p class="connect-desc" id="connect-desc">当前会话尚未与对端连通，连接成功后即可收发消息和文件。</p>
+                  <h2 id="connect-title" data-i18n="请先建立 P2P 连接">请先建立 P2P 连接</h2>
+                  <p class="connect-desc" id="connect-desc" data-i18n="当前会话尚未与对端连通，连接成功后即可收发消息和文件。">当前会话尚未与对端连通，连接成功后即可收发消息和文件。</p>
                   <p class="connect-peer" id="connect-peer"></p>
                   <label class="field connect-pass-field" for="connect-peer-pass">
-                    <span>认证口令</span>
+                    <span data-i18n="认证口令">认证口令</span>
                     <div class="input-wrap">
                       <input
                         id="connect-peer-pass"
                         type="password"
                         maxlength="128"
-                        placeholder="可留空，可修改"
+                        data-i18n-placeholder="可留空，可修改" placeholder="可留空，可修改"
                         autocomplete="off"
                       />
                       <button
                         class="ghost-btn"
                         type="button"
                         id="toggle-connect-pass"
-                        aria-label="显示认证口令"
+                        data-i18n-aria="显示认证口令" aria-label="显示认证口令"
+                        data-i18n="显示"
                       >
                         显示
                       </button>
                     </div>
                   </label>
-                  <button class="btn-primary btn-connect" id="btn-connect" type="button">连接</button>
-                  <p class="connect-error" id="connect-error" hidden>
+                  <button class="btn-primary btn-connect" id="btn-connect" type="button" data-i18n="连接">连接</button>
+                  <p class="connect-error" id="connect-error" hidden data-i18n="连接失败。请确认对方 Token 是否在线，以及当前网络是否可达。">
                     连接失败。请确认对方 Token 是否在线，以及当前网络是否可达。
                   </p>
                 </div>
@@ -249,80 +285,80 @@
                       <span class="drive-glyph"></span>
                     </span>
                     <div class="nas-head-text">
-                      <h2 id="nas-title">网盘连接</h2>
+                      <h2 id="nas-title" data-i18n="网盘连接">网盘连接</h2>
                     </div>
                   </div>
                   <div class="nas-head-actions">
-                    <button type="button" class="nas-head-btn" id="nas-upload">上传</button>
+                    <button type="button" class="nas-head-btn" id="nas-upload" data-i18n="上传">上传</button>
                     <button type="button" class="nas-head-btn" id="nas-task-toggle">
-                      任务
+                      <span data-i18n="任务">任务</span>
                       <span class="nas-task-badge" id="nas-task-badge" hidden>0</span>
                     </button>
-                    <div class="nas-view-toggle" role="group" aria-label="显示方式">
-                      <button type="button" id="nas-view-list" data-nas-view="list" title="列表">列表</button>
-                      <button type="button" id="nas-view-grid" data-nas-view="grid" title="图标">图标</button>
+                    <div class="nas-view-toggle" role="group" data-i18n-aria="显示方式" aria-label="显示方式">
+                      <button type="button" id="nas-view-list" data-nas-view="list" data-i18n-title="列表" title="列表" data-i18n="列表">列表</button>
+                      <button type="button" id="nas-view-grid" data-nas-view="grid" data-i18n-title="图标" title="图标" data-i18n="图标">图标</button>
                     </div>
                   </div>
                   <div class="nas-path-row">
-                    <button type="button" class="nas-path-btn is-icon" id="nas-path-up" title="向上" aria-label="向上" disabled>
+                    <button type="button" class="nas-path-btn is-icon" id="nas-path-up" data-i18n-title="向上" title="向上" data-i18n-aria="向上" aria-label="向上" disabled>
                       <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path fill="currentColor" d="M11 19V8.83L6.12 13.71a1 1 0 1 1-1.41-1.41l6.58-6.59a1 1 0 0 1 1.42 0l6.58 6.59a1 1 0 0 1-1.41 1.41L13 8.83V19a1 1 0 1 1-2 0z"/>
                       </svg>
                     </button>
-                    <nav id="nas-path" class="nas-crumb" aria-label="当前路径">/</nav>
-                    <button type="button" class="nas-path-btn is-icon" id="nas-path-refresh" title="刷新" aria-label="刷新">
+                    <nav id="nas-path" class="nas-crumb" data-i18n-aria="当前路径" aria-label="当前路径">/</nav>
+                    <button type="button" class="nas-path-btn is-icon" id="nas-path-refresh" data-i18n-title="刷新" title="刷新" data-i18n-aria="刷新" aria-label="刷新">
                       <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path fill="currentColor" d="M17.65 6.35A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.75 10h-2.1A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
                       </svg>
                     </button>
                     <div class="nas-search">
-                      <input id="nas-search" type="search" spellcheck="false" placeholder="搜索网盘" autocomplete="off" />
+                      <input id="nas-search" type="search" spellcheck="false" data-i18n-placeholder="搜索网盘" placeholder="搜索网盘" autocomplete="off" />
                       <div class="nas-search-drop" id="nas-search-drop" hidden></div>
                     </div>
                   </div>
                 </header>
-                <section class="nas-stats" aria-label="网盘概况">
+                <section class="nas-stats" data-i18n-aria="网盘概况" aria-label="网盘概况">
                   <div class="nas-stats-row">
                     <span class="nas-stat">
-                      <label>总容量</label>
+                      <label data-i18n="总容量">总容量</label>
                       <strong id="nas-disk-total">—</strong>
                     </span>
                     <span class="nas-stat">
-                      <label>剩余</label>
+                      <label data-i18n="剩余">剩余</label>
                       <strong id="nas-disk-free">—</strong>
                     </span>
                     <span class="nas-stat">
-                      <label>已用</label>
+                      <label data-i18n="已用">已用</label>
                       <strong id="nas-disk-used">—</strong>
                     </span>
                     <span class="nas-stat">
-                      <label>文件</label>
+                      <label data-i18n="文件">文件</label>
                       <strong id="nas-file-num">—</strong>
                     </span>
                   </div>
                   <div class="nas-meter" aria-hidden="true">
                     <span id="nas-meter-bar"></span>
                   </div>
-                  <p class="nas-stats-hint" id="nas-stats-hint">正在获取网盘信息…</p>
+                  <p class="nas-stats-hint" id="nas-stats-hint" data-i18n="正在获取网盘信息…">正在获取网盘信息…</p>
                 </section>
                 <div class="nas-files" id="nas-files" data-view="list">
                   <div class="nas-list-head" aria-hidden="true">
-                    <span>名称</span>
-                    <span>种类</span>
-                    <span>大小</span>
-                    <span>修改日期</span>
+                    <span data-i18n="名称">名称</span>
+                    <span data-i18n="种类">种类</span>
+                    <span data-i18n="大小">大小</span>
+                    <span data-i18n="修改日期">修改日期</span>
                   </div>
                   <div class="nas-file-body" id="nas-file-body"></div>
                   <div class="nas-drop-mask" id="nas-drop-mask" hidden>
-                    <div class="chat-drop-card" id="nas-drop-hint">松开即可上传到当前目录</div>
+                    <div class="chat-drop-card" id="nas-drop-hint" data-i18n="松开即可上传到当前目录">松开即可上传到当前目录</div>
                   </div>
                 </div>
                 <section class="nas-tasks" id="nas-tasks" hidden>
                   <header class="nas-tasks-head">
-                    <h3>任务</h3>
+                    <h3 data-i18n="任务">任务</h3>
                     <div class="nas-tasks-head-actions">
-                      <button type="button" class="nas-head-btn" id="nas-task-clear">清除</button>
-                      <button type="button" class="nas-task-close" id="nas-task-close" title="关闭任务" aria-label="关闭任务">×</button>
+                      <button type="button" class="nas-head-btn" id="nas-task-clear" data-i18n="清除">清除</button>
+                      <button type="button" class="nas-task-close" id="nas-task-close" data-i18n-title="关闭任务" title="关闭任务" data-i18n-aria="关闭任务" aria-label="关闭任务">×</button>
                     </div>
                   </header>
                   <div class="nas-task-list" id="nas-task-list"></div>
@@ -339,7 +375,7 @@
                       <p id="chat-subtitle">—</p>
                     </div>
                   </div>
-                  <span class="chat-conn-label" id="chat-conn-label">未连接</span>
+                  <span class="chat-conn-label" id="chat-conn-label" data-i18n="未连接">未连接</span>
                 </header>
 
                 <div class="chat-log" id="chat-log"></div>
@@ -347,40 +383,38 @@
                 <form class="composer" id="composer">
                   <div class="pending-file" id="pending-file">
                     <span id="pending-file-name"></span>
-                    <button type="button" id="pending-file-clear" aria-label="移除文件">×</button>
+                    <button type="button" id="pending-file-clear" data-i18n-aria="移除文件" aria-label="移除文件">×</button>
                   </div>
                   <div class="composer-row">
                     <textarea
                       id="composer-input"
                       rows="1"
-                      placeholder="输入消息，Enter 发送，Shift+Enter 换行"
+                      data-i18n-placeholder="输入消息，Enter 发送，Shift+Enter 换行" placeholder="输入消息，Enter 发送，Shift+Enter 换行"
                     ></textarea>
                     <input id="file-input" type="file" hidden />
-                    <button class="btn-voice" id="btn-voice" type="button" title="语音通话">语音</button>
-                    <button class="btn-voice" id="btn-desktop" type="button" title="远程控制">远程控制</button>
+                    <button class="btn-voice" id="btn-voice" type="button" data-i18n-title="语音通话" title="语音通话" data-i18n="语音">语音</button>
+                    <button class="btn-voice" id="btn-desktop" type="button" data-i18n-title="远程控制" title="远程控制" data-i18n="远程控制">远程控制</button>
                     <div class="shot-split" id="shot-split">
-                      <button class="btn-shot" id="btn-shot" type="button" title="截图 (⌃⌘A)">截图</button>
+                      <button class="btn-shot" id="btn-shot" type="button" data-i18n-title="截图 (⌃⌘A)" title="截图 (⌃⌘A)" data-i18n="截图">截图</button>
                       <button
                         class="btn-shot-caret"
                         id="btn-shot-caret"
                         type="button"
-                        title="更多截图选项"
-                        aria-label="更多截图选项"
+                        data-i18n-title="更多截图选项" title="更多截图选项"
+                        data-i18n-aria="更多截图选项" aria-label="更多截图选项"
                         aria-haspopup="menu"
                         aria-expanded="false"
                       ></button>
                       <div class="shot-menu" id="shot-menu" hidden role="menu">
-                        <button type="button" role="menuitem" data-shot-hide>
-                          隐藏当前窗口后截图
-                        </button>
+                        <button type="button" role="menuitem" data-shot-hide data-i18n="隐藏当前窗口后截图">隐藏当前窗口后截图</button>
                       </div>
                     </div>
-                    <button class="btn-file" id="btn-file" type="button">选择文件</button>
-                    <button class="btn-send" id="btn-send" type="submit">发送</button>
+                    <button class="btn-file" id="btn-file" type="button" data-i18n="选择文件">选择文件</button>
+                    <button class="btn-send" id="btn-send" type="submit" data-i18n="发送">发送</button>
                   </div>
                 </form>
                 <div class="chat-drop-mask" id="chat-drop-mask" hidden>
-                  <div class="chat-drop-card">松开即可发送文件</div>
+                  <div class="chat-drop-card" data-i18n="松开即可发送文件">松开即可发送文件</div>
                 </div>
               </div>
             </section>
@@ -394,101 +428,138 @@
           <div class="modal-chat-hero" aria-hidden="true">
             <span class="chat-glyph"></span>
           </div>
-          <h3>新建会话</h3>
-          <p class="modal-desc">输入对方 Token 添加到聊天会话列表。认证口令可留空，连接时仍可修改。</p>
+          <h3 data-i18n="新建会话">新建会话</h3>
+          <p class="modal-desc" data-i18n="输入对方 Token 添加到聊天会话列表。认证口令可留空，连接时仍可修改。">输入对方 Token 添加到聊天会话列表。认证口令可留空，连接时仍可修改。</p>
           <label class="field">
-            <span>对方 Token</span>
-            <input id="new-peer-token" type="text" spellcheck="false" placeholder="请输入对方 Token" />
+            <span data-i18n="对方 Token">对方 Token</span>
+            <input id="new-peer-token" type="text" spellcheck="false" data-i18n-placeholder="请输入对方 Token" placeholder="请输入对方 Token" />
           </label>
           <label class="field">
-            <span>认证口令</span>
-            <input id="new-peer-pass" type="text" placeholder="可留空" />
+            <span data-i18n="认证口令">认证口令</span>
+            <input id="new-peer-pass" type="text" data-i18n-placeholder="可留空" placeholder="可留空" />
           </label>
-          <p class="modal-error" id="new-session-error" hidden>请输入对方 Token</p>
+          <p class="modal-error" id="new-session-error" hidden data-i18n="请输入对方 Token">请输入对方 Token</p>
           <div class="modal-actions">
-            <button type="button" class="btn-ghost" data-close-modal>取消</button>
-            <button type="button" class="btn-primary" id="btn-create-session">添加</button>
+            <button type="button" class="btn-ghost" data-close-modal data-i18n="取消">取消</button>
+            <button type="button" class="btn-primary" id="btn-create-session" data-i18n="添加">添加</button>
           </div>
         </div>
         <div class="modal modal-hero-card" id="modal-new-drive" hidden>
           <div class="modal-drive-hero" aria-hidden="true">
             <span class="drive-glyph"></span>
           </div>
-          <h3>新建连接</h3>
-          <p class="modal-desc">
+          <h3 data-i18n="新建连接">新建连接</h3>
+          <p class="modal-desc" data-i18n="输入家里 NAS 或网盘设备的 webrpc Token，添加到「网盘连接」。连接后可查阅和更新 NAS 上的文件。认证口令可留空，连接时仍可修改。">
             输入家里 NAS 或网盘设备的 webrpc Token，添加到「网盘连接」。连接后可查阅和更新 NAS 上的文件。认证口令可留空，连接时仍可修改。
           </p>
           <label class="field">
-            <span>网盘 Token</span>
-            <input id="new-drive-token" type="text" spellcheck="false" placeholder="请输入网盘 Token" />
+            <span data-i18n="网盘 Token">网盘 Token</span>
+            <input id="new-drive-token" type="text" spellcheck="false" data-i18n-placeholder="请输入网盘 Token" placeholder="请输入网盘 Token" />
           </label>
           <label class="field">
-            <span>认证口令</span>
-            <input id="new-drive-pass" type="text" placeholder="可留空" />
+            <span data-i18n="认证口令">认证口令</span>
+            <input id="new-drive-pass" type="text" data-i18n-placeholder="可留空" placeholder="可留空" />
           </label>
-          <p class="modal-error" id="new-drive-error" hidden>请输入网盘 Token</p>
+          <p class="modal-error" id="new-drive-error" hidden data-i18n="请输入网盘 Token">请输入网盘 Token</p>
           <div class="modal-actions">
-            <button type="button" class="btn-ghost" data-close-modal>取消</button>
-            <button type="button" class="btn-primary" id="btn-create-drive">添加</button>
+            <button type="button" class="btn-ghost" data-close-modal data-i18n="取消">取消</button>
+            <button type="button" class="btn-primary" id="btn-create-drive" data-i18n="添加">添加</button>
           </div>
         </div>
         <div class="modal" id="modal-remark" hidden>
-          <h3 id="remark-title">设置备注</h3>
+          <h3 id="remark-title" data-i18n="设置备注">设置备注</h3>
           <label class="field">
-            <span>备注名称</span>
-            <input id="remark-input" type="text" maxlength="40" placeholder="例如：办公室 NAS" />
+            <span data-i18n="备注名称">备注名称</span>
+            <input id="remark-input" type="text" maxlength="40" data-i18n-placeholder="例如：办公室 NAS" placeholder="例如：办公室 NAS" />
           </label>
           <div class="modal-actions">
-            <button type="button" class="btn-ghost" data-close-modal>取消</button>
-            <button type="button" class="btn-primary" id="btn-save-remark">保存</button>
+            <button type="button" class="btn-ghost" data-close-modal data-i18n="取消">取消</button>
+            <button type="button" class="btn-primary" id="btn-save-remark" data-i18n="保存">保存</button>
           </div>
         </div>
         <div class="modal" id="modal-confirm" hidden>
-          <h3 id="confirm-title">删除会话</h3>
-          <p class="modal-desc" id="confirm-desc">删除后将从列表和本地缓存中移除。</p>
+          <h3 id="confirm-title" data-i18n="删除会话">删除会话</h3>
+          <p class="modal-desc" id="confirm-desc" data-i18n="删除后将从列表和本地缓存中移除。">删除后将从列表和本地缓存中移除。</p>
           <ul class="modal-fail-list" id="confirm-fail-list" hidden></ul>
           <div class="modal-actions">
-            <button type="button" class="btn-ghost" id="btn-confirm-cancel" data-close-modal>取消</button>
-            <button type="button" class="btn-danger" id="btn-confirm-ok">删除</button>
+            <button type="button" class="btn-ghost" id="btn-confirm-cancel" data-close-modal data-i18n="取消">取消</button>
+            <button type="button" class="btn-danger" id="btn-confirm-ok" data-i18n="删除">删除</button>
           </div>
         </div>
         <div class="modal" id="modal-nas-create" hidden>
-          <h3 id="nas-create-title">新建文件</h3>
-          <p class="modal-desc" id="nas-create-hint">请填写文件名，必须包含扩展名，例如 readme.txt</p>
+          <h3 id="nas-create-title" data-i18n="新建文件">新建文件</h3>
+          <p class="modal-desc" id="nas-create-hint" data-i18n="请填写文件名，必须包含扩展名，例如 readme.txt">请填写文件名，必须包含扩展名，例如 readme.txt</p>
           <label class="field">
-            <span id="nas-create-label">文件名</span>
+            <span id="nas-create-label" data-i18n="文件名">文件名</span>
             <input id="nas-create-input" type="text" maxlength="200" spellcheck="false" placeholder="" />
           </label>
           <p class="modal-error" id="nas-create-error" hidden></p>
           <div class="modal-actions">
-            <button type="button" class="btn-ghost" id="nas-create-cancel" data-close-modal>取消</button>
-            <button type="button" class="btn-primary" id="nas-create-ok">确认</button>
+            <button type="button" class="btn-ghost" id="nas-create-cancel" data-close-modal data-i18n="取消">取消</button>
+            <button type="button" class="btn-primary" id="nas-create-ok" data-i18n="确认">确认</button>
           </div>
         </div>
         <div class="modal modal-nas-move" id="modal-nas-move" hidden>
-          <h3>移动到</h3>
-          <p class="modal-desc" id="nas-move-hint">
+          <h3 data-i18n="移动到">移动到</h3>
+          <p class="modal-desc" id="nas-move-hint" data-i18n="将所选项目移动到下面打开的目录。可编辑路径后回车或点「打开」进入，双击文件夹进入子目录。点「确定」后移动到当前打开的目录。">
             将所选项目移动到下面打开的目录。可编辑路径后回车或点「打开」进入，双击文件夹进入子目录。点「确定」后移动到当前打开的目录。
           </p>
           <div class="nas-move-path">
-            <button type="button" class="nas-path-btn is-icon" id="nas-move-up" title="向上" aria-label="向上">
+            <button type="button" class="nas-path-btn is-icon" id="nas-move-up" data-i18n-title="向上" title="向上" data-i18n-aria="向上" aria-label="向上">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path fill="currentColor" d="M11 19V8.83L6.12 13.71a1 1 0 1 1-1.41-1.41l6.58-6.59a1 1 0 0 1 1.42 0l6.58 6.59a1 1 0 0 1-1.41 1.41L13 8.83V19a1 1 0 1 1-2 0z"/>
               </svg>
             </button>
-            <input id="nas-move-path" type="text" spellcheck="false" placeholder="/文档/工作" />
-            <button type="button" class="nas-path-btn" id="nas-move-go">打开</button>
+            <input id="nas-move-path" type="text" spellcheck="false" data-i18n-placeholder="/文档/工作" placeholder="/文档/工作" />
+            <button type="button" class="nas-path-btn" id="nas-move-go" data-i18n="打开">打开</button>
           </div>
           <div class="nas-move-list" id="nas-move-list"></div>
           <p class="modal-error" id="nas-move-error" hidden></p>
           <div class="modal-actions">
-            <button type="button" class="btn-ghost" data-close-modal>取消</button>
-            <button type="button" class="btn-primary" id="nas-move-ok">确定</button>
+            <button type="button" class="btn-ghost" data-close-modal data-i18n="取消">取消</button>
+            <button type="button" class="btn-primary" id="nas-move-ok" data-i18n="确定">确定</button>
+          </div>
+        </div>
+        <div class="modal modal-register-progress" id="modal-register-progress" hidden>
+          <h3 id="register-progress-title" data-i18n="正在注册">正在注册</h3>
+          <p class="modal-desc" id="register-progress-desc" data-i18n="正在创建 webrpc 账户，请稍候…">正在创建 webrpc 账户，请稍候…</p>
+          <div id="register-progress-body">
+            <ul class="register-progress-steps" id="register-progress-steps">
+              <li data-step="register" data-i18n="创建账户">创建账户</li>
+              <li data-step="login" data-i18n="登录控制台">登录控制台</li>
+              <li data-step="tokens" data-i18n="领取 Token">领取 Token</li>
+            </ul>
+            <div class="register-progress-spinner" id="register-progress-spinner" aria-hidden="true"></div>
+          </div>
+          <div class="register-success-panel" id="register-success-panel" hidden>
+            <p class="register-success-desc" data-i18n="注册成功！Token、密码与认证口令已填入下方登录框，请确认后登录。">
+              注册成功！Token、密码与认证口令已填入下方登录框，请确认后登录。
+            </p>
+            <dl class="register-success-meta">
+              <div class="register-success-row">
+                <dt>Token</dt>
+                <dd id="register-success-token">—</dd>
+              </div>
+              <div class="register-success-row">
+                <dt data-i18n="认证口令">认证口令</dt>
+                <dd id="register-success-passphrase">—</dd>
+              </div>
+              <div class="register-success-row">
+                <dt data-i18n="Token 过期时间">Token 过期时间</dt>
+                <dd id="register-success-expiry">—</dd>
+              </div>
+            </dl>
+          </div>
+          <p class="modal-error" id="register-progress-error" hidden></p>
+          <div class="modal-actions">
+            <button type="button" class="btn-ghost" id="register-progress-later" hidden data-i18n="稍后登录">稍后登录</button>
+            <button type="button" class="btn-primary" id="register-progress-login" hidden data-i18n="立即登录">立即登录</button>
+            <button type="button" class="btn-primary" id="register-progress-close" hidden data-i18n="关闭">关闭</button>
           </div>
         </div>
         <div class="modal modal-nas-zip" id="modal-nas-zip" hidden>
-          <h3 id="nas-zip-title">正在压缩</h3>
-          <p class="modal-desc" id="nas-zip-desc">正在压缩文件夹…</p>
+          <h3 id="nas-zip-title" data-i18n="正在压缩">正在压缩</h3>
+          <p class="modal-desc" id="nas-zip-desc" data-i18n="正在压缩文件夹…">正在压缩文件夹…</p>
           <div class="nas-zip-progress" id="nas-zip-progress">
             <div class="nas-zip-spinner" id="nas-zip-spinner" aria-hidden="true"></div>
             <div class="nas-zip-bar" aria-hidden="true"><span id="nas-zip-bar"></span></div>
@@ -496,34 +567,34 @@
           </div>
           <p class="modal-error" id="nas-zip-error" hidden></p>
           <div class="modal-actions">
-            <button type="button" class="btn-ghost" id="nas-zip-async">后台进行</button>
-            <button type="button" class="btn-primary" id="nas-zip-ok" hidden>关闭</button>
+            <button type="button" class="btn-ghost" id="nas-zip-async" data-i18n="后台进行">后台进行</button>
+            <button type="button" class="btn-primary" id="nas-zip-ok" hidden data-i18n="关闭">关闭</button>
           </div>
         </div>
       </div>
     </div>
   </div>
   <div class="bubble-menu" id="bubble-menu" hidden>
-    <button type="button" data-bubble-action="delete">删除</button>
+    <button type="button" data-bubble-action="delete" data-i18n="删除">删除</button>
   </div>
   <div class="nas-ctx" id="nas-ctx" hidden>
-    <button type="button" class="nas-ctx-action" id="nas-ctx-download" data-nas-download hidden>下载</button>
-    <button type="button" class="nas-ctx-action" id="nas-ctx-move" data-nas-move hidden>移动</button>
-    <button type="button" class="nas-ctx-action" id="nas-ctx-rename" data-nas-rename hidden>重命名</button>
-    <button type="button" class="nas-ctx-action" id="nas-ctx-zip" data-nas-zip hidden>压缩</button>
-    <button type="button" class="nas-ctx-action is-danger" id="nas-ctx-delete" data-nas-delete hidden>删除</button>
+    <button type="button" class="nas-ctx-action" id="nas-ctx-download" data-nas-download hidden data-i18n="下载">下载</button>
+    <button type="button" class="nas-ctx-action" id="nas-ctx-move" data-nas-move hidden data-i18n="移动">移动</button>
+    <button type="button" class="nas-ctx-action" id="nas-ctx-rename" data-nas-rename hidden data-i18n="重命名">重命名</button>
+    <button type="button" class="nas-ctx-action" id="nas-ctx-zip" data-nas-zip hidden data-i18n="压缩">压缩</button>
+    <button type="button" class="nas-ctx-action is-danger" id="nas-ctx-delete" data-nas-delete hidden data-i18n="删除">删除</button>
     <div class="nas-ctx-item has-sub">
-      <button type="button" class="nas-ctx-btn">新建</button>
+      <button type="button" class="nas-ctx-btn" data-i18n="新建">新建</button>
       <div class="nas-ctx-sub">
-        <button type="button" data-nas-create="folder">文件夹</button>
-        <button type="button" data-nas-create="file">文件</button>
+        <button type="button" data-nas-create="folder" data-i18n="文件夹">文件夹</button>
+        <button type="button" data-nas-create="file" data-i18n="文件">文件</button>
       </div>
     </div>
   </div>
   <div class="media-overlay" id="media-overlay" hidden>
     <div class="media-overlay-backdrop" data-close-media></div>
     <div class="media-overlay-panel">
-      <button type="button" class="media-overlay-close" data-close-media aria-label="关闭">×</button>
+      <button type="button" class="media-overlay-close" data-close-media data-i18n-aria="关闭" aria-label="关闭">×</button>
       <img class="media-overlay-image" id="media-overlay-image" alt="" hidden />
       <video class="media-overlay-video" id="media-overlay-video" controls hidden></video>
     </div>
@@ -531,7 +602,7 @@
   <div class="media-overlay" id="nas-preview" hidden>
     <div class="media-overlay-backdrop" data-close-nas-preview></div>
     <div class="media-overlay-panel">
-      <button type="button" class="media-overlay-close" data-close-nas-preview aria-label="关闭">×</button>
+      <button type="button" class="media-overlay-close" data-close-nas-preview data-i18n-aria="关闭" aria-label="关闭">×</button>
       <div class="nas-preview-loading" id="nas-preview-loading" hidden>
         <div class="nas-preview-spinner" id="nas-preview-spinner" aria-hidden="true"></div>
         <p class="nas-preview-status" id="nas-preview-status"></p>
@@ -545,7 +616,7 @@
     <div class="nas-editor-card nas-office-card">
       <header class="nas-editor-head">
         <div>
-          <h2 id="nas-office-title">文稿</h2>
+          <h2 id="nas-office-title" data-i18n="文稿">文稿</h2>
           <p id="nas-office-path">/</p>
         </div>
         <p class="nas-editor-hint" id="nas-office-hint"></p>
@@ -553,29 +624,29 @@
       <div class="nas-office-body">
         <div class="nas-office-loading" id="nas-office-loading">
           <div class="nas-preview-spinner" id="nas-office-spinner" aria-hidden="true"></div>
-          <p id="nas-office-status">正在加载文件…</p>
+          <p id="nas-office-status" data-i18n="正在加载文件…">正在加载文件…</p>
         </div>
-        <p class="nas-office-guide" id="nas-office-guide" hidden>已使用系统软件打开。请在办公软件中保存，保存后会自动同步到网盘。</p>
+        <p class="nas-office-guide" id="nas-office-guide" hidden data-i18n="已使用系统软件打开。请在办公软件中保存，保存后会自动同步到网盘。">已使用系统软件打开。请在办公软件中保存，保存后会自动同步到网盘。</p>
       </div>
       <footer class="nas-editor-foot">
-        <button type="button" class="btn-ghost" id="nas-office-exit">回到网盘</button>
-        <button type="button" class="btn-primary" id="nas-office-sync">立即同步</button>
+        <button type="button" class="btn-ghost" id="nas-office-exit" data-i18n="回到网盘">回到网盘</button>
+        <button type="button" class="btn-primary" id="nas-office-sync" data-i18n="立即同步">立即同步</button>
       </footer>
     </div>
     <div class="nas-editor-ask" id="nas-office-ask" hidden>
       <div class="nas-editor-ask-card">
-        <p>文件已修改，结束编辑前是否同步到网盘？</p>
+        <p data-i18n="文件已修改，结束编辑前是否同步到网盘？">文件已修改，结束编辑前是否同步到网盘？</p>
         <div class="nas-editor-ask-actions">
-          <button type="button" class="btn-ghost" id="nas-office-ask-cancel">取消</button>
-          <button type="button" class="btn-ghost" id="nas-office-ask-discard">不同步</button>
-          <button type="button" class="btn-primary" id="nas-office-ask-sync">同步</button>
+          <button type="button" class="btn-ghost" id="nas-office-ask-cancel" data-i18n="取消">取消</button>
+          <button type="button" class="btn-ghost" id="nas-office-ask-discard" data-i18n="不同步">不同步</button>
+          <button type="button" class="btn-primary" id="nas-office-ask-sync" data-i18n="同步">同步</button>
         </div>
       </div>
     </div>
   </div>
   <div class="nas-office-dock" id="nas-office-dock" hidden>
     <div class="nas-office-dock-inner">
-      <p class="nas-office-dock-label">正在编辑</p>
+      <p class="nas-office-dock-label" data-i18n="正在编辑">正在编辑</p>
       <div class="nas-office-dock-list" id="nas-office-dock-list"></div>
     </div>
   </div>
@@ -583,24 +654,24 @@
     <div class="nas-editor-card">
       <header class="nas-editor-head">
         <div>
-          <h2 id="nas-editor-title">文本</h2>
+          <h2 id="nas-editor-title" data-i18n="文本">文本</h2>
           <p id="nas-editor-path">/</p>
         </div>
         <p class="nas-editor-hint" id="nas-editor-hint"></p>
       </header>
       <textarea id="nas-editor-body" spellcheck="false"></textarea>
       <footer class="nas-editor-foot">
-        <button type="button" class="btn-ghost" id="nas-editor-exit">退出</button>
-        <button type="button" class="btn-primary" id="nas-editor-save">保存</button>
+        <button type="button" class="btn-ghost" id="nas-editor-exit" data-i18n="退出">退出</button>
+        <button type="button" class="btn-primary" id="nas-editor-save" data-i18n="保存">保存</button>
       </footer>
     </div>
     <div class="nas-editor-ask" id="nas-editor-ask" hidden>
       <div class="nas-editor-ask-card">
-        <p>文件已修改，是否保存？</p>
+        <p data-i18n="文件已修改，是否保存？">文件已修改，是否保存？</p>
         <div class="nas-editor-ask-actions">
-          <button type="button" class="btn-ghost" id="nas-editor-ask-cancel">取消</button>
-          <button type="button" class="btn-ghost" id="nas-editor-ask-discard">不保存</button>
-          <button type="button" class="btn-primary" id="nas-editor-ask-save">保存</button>
+          <button type="button" class="btn-ghost" id="nas-editor-ask-cancel" data-i18n="取消">取消</button>
+          <button type="button" class="btn-ghost" id="nas-editor-ask-discard" data-i18n="不保存">不保存</button>
+          <button type="button" class="btn-primary" id="nas-editor-ask-save" data-i18n="保存">保存</button>
         </div>
       </div>
     </div>
@@ -609,15 +680,15 @@
     <div class="voice-backdrop"></div>
     <div class="voice-card">
       <div class="voice-mark" aria-hidden="true"></div>
-      <h3 id="voice-title">语音通话</h3>
+      <h3 id="voice-title" data-i18n="语音通话">语音通话</h3>
       <p id="voice-sub">—</p>
       <p class="voice-timer" id="voice-timer" hidden>00:00</p>
       <div class="voice-actions">
-        <button type="button" class="voice-btn is-mute" id="voice-mute" hidden>静音</button>
-        <button type="button" class="voice-btn is-cancel" id="voice-cancel">取消</button>
-        <button type="button" class="voice-btn is-reject" id="voice-reject" hidden>拒绝</button>
-        <button type="button" class="voice-btn is-accept" id="voice-accept" hidden>接听</button>
-        <button type="button" class="voice-btn is-hangup" id="voice-hangup" hidden>挂断</button>
+        <button type="button" class="voice-btn is-mute" id="voice-mute" hidden data-i18n="静音">静音</button>
+        <button type="button" class="voice-btn is-cancel" id="voice-cancel" data-i18n="取消">取消</button>
+        <button type="button" class="voice-btn is-reject" id="voice-reject" hidden data-i18n="拒绝">拒绝</button>
+        <button type="button" class="voice-btn is-accept" id="voice-accept" hidden data-i18n="接听">接听</button>
+        <button type="button" class="voice-btn is-hangup" id="voice-hangup" hidden data-i18n="挂断">挂断</button>
       </div>
     </div>
   </div>
@@ -625,22 +696,22 @@
     <div class="desktop-card">
       <div class="desktop-bar">
         <div class="desktop-bar-text">
-          <h3 id="desktop-title">远程控制</h3>
+          <h3 id="desktop-title" data-i18n="远程控制">远程控制</h3>
           <p id="desktop-sub">—</p>
         </div>
         <span class="desktop-stats" id="desktop-stats" hidden>—</span>
         <div class="desktop-actions">
-          <button type="button" class="voice-btn is-cancel" id="desktop-cancel" hidden>取消</button>
-          <button type="button" class="voice-btn is-reject" id="desktop-reject" hidden>拒绝</button>
-          <button type="button" class="voice-btn is-accept" id="desktop-accept" hidden>同意</button>
-          <button type="button" class="voice-btn is-mute" id="desktop-full" hidden>全屏</button>
-          <button type="button" class="voice-btn is-hangup" id="desktop-stop" hidden>结束</button>
+          <button type="button" class="voice-btn is-cancel" id="desktop-cancel" hidden data-i18n="取消">取消</button>
+          <button type="button" class="voice-btn is-reject" id="desktop-reject" hidden data-i18n="拒绝">拒绝</button>
+          <button type="button" class="voice-btn is-accept" id="desktop-accept" hidden data-i18n="同意">同意</button>
+          <button type="button" class="voice-btn is-mute" id="desktop-full" hidden data-i18n="全屏">全屏</button>
+          <button type="button" class="voice-btn is-hangup" id="desktop-stop" hidden data-i18n="结束">结束</button>
         </div>
       </div>
       <div class="desktop-stage" id="desktop-stage" hidden>
         <canvas id="desktop-frame" hidden></canvas>
         <div class="desktop-cursor" id="desktop-cursor" hidden></div>
-        <p class="desktop-placeholder" id="desktop-placeholder">等待对方桌面…</p>
+        <p class="desktop-placeholder" id="desktop-placeholder" data-i18n="等待对方桌面…">等待对方桌面…</p>
       </div>
     </div>
   </div>
@@ -649,9 +720,10 @@
     <span class="nas-icon is-file" id="nas-drag-ghost-icon"></span>
     <div class="nas-drag-ghost-text">
       <span class="nas-drag-ghost-name" id="nas-drag-ghost-name"></span>
-      <span class="nas-drag-ghost-tip" id="nas-drag-ghost-tip">拖到文件夹后松开即可移动</span>
+      <span class="nas-drag-ghost-tip" id="nas-drag-ghost-tip" data-i18n="拖到文件夹后松开即可移动">拖到文件夹后松开即可移动</span>
     </div>
   </div>
+  <script src="js/i18n.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

@@ -1,4 +1,5 @@
 (function () {
+  const t = (window.F2F_I18N && window.F2F_I18N.t) || function (s, vars) { return s; };
   const TITLE_MAX_BYTES = 30;
   const COPY_MIN_LINES = 5;
 
@@ -43,9 +44,30 @@
   const pageSessions = document.getElementById("page-sessions");
 
   const infoToken = document.getElementById("info-token");
+  const btnManageToken = document.getElementById("btn-manage-token");
   const infoPassphrase = document.getElementById("info-passphrase");
-  const infoLoginTime = document.getElementById("info-login-time");
+  const infoAccountRemark = document.getElementById("info-account-remark");
   const infoSessionCount = document.getElementById("info-session-count");
+  const quickRegisterBtn = document.getElementById("btn-quick-register");
+  const modalRegisterProgress = document.getElementById("modal-register-progress");
+  const registerProgressError = document.getElementById("register-progress-error");
+  const registerProgressClose = document.getElementById("register-progress-close");
+  const registerProgressSteps = document.getElementById("register-progress-steps");
+  const registerProgressSpinner = document.getElementById("register-progress-spinner");
+  const registerProgressTitle = document.getElementById("register-progress-title");
+  const registerProgressDesc = document.getElementById("register-progress-desc");
+  const registerProgressBody = document.getElementById("register-progress-body");
+  const registerSuccessPanel = document.getElementById("register-success-panel");
+  const registerSuccessToken = document.getElementById("register-success-token");
+  const registerSuccessPassphrase = document.getElementById("register-success-passphrase");
+  const registerSuccessExpiry = document.getElementById("register-success-expiry");
+  const registerProgressLogin = document.getElementById("register-progress-login");
+  const registerProgressLater = document.getElementById("register-progress-later");
+  const accountItemTokenExpiry = document.getElementById("account-item-token-expiry");
+  const infoTokenExpiry = document.getElementById("info-token-expiry");
+  const accountRenewBanner = document.getElementById("account-renew-banner");
+  const accountRenewText = document.getElementById("account-renew-text");
+  const accountRenewBtn = document.getElementById("account-renew-btn");
   const sessionListEl = document.getElementById("session-list");
   const driveListEl = document.getElementById("drive-list");
   const panelUnselected = document.getElementById("panel-unselected");
@@ -310,10 +332,18 @@
     voiceMuted: false,
     voiceTimer: null,
     voiceStartedAt: 0,
+    portalLink: null,
+    portalExpiryMs: 0,
+    portalExpiryTimer: null,
+    registerPending: null,
   };
 
   const SIDEBAR_SPLIT_KEY = "file2file.sidebarSplit";
   const SIDEBAR_SPLIT_MIN = 96;
+  const PORTAL_EXPIRY_WARN_DAYS = 7;
+  const PORTAL_EXPIRY_REFRESH_MS = 6 * 60 * 60 * 1000;
+  const PORTAL_ORDERS_URL = "https://www.webrpc.cn/#orders";
+  const REGISTER_TIMEOUT_MS = 30000;
   let sidebarSplitRatio = 0.5;
   let sidebarSplitDragging = false;
   const NAS_VIEW_KEY = "file2file.nasView";
@@ -394,6 +424,10 @@
         });
         window.__TAURI__.event.listen("webrpc-nas-task", function (event) {
           onNasTask(event.payload || {});
+        });
+        window.__TAURI__.event.listen("portal-register-progress", function (event) {
+          const payload = event.payload || {};
+          if (payload.step) setRegisterStep(payload.step);
         });
         window.__TAURI__.event.listen("screenshot-done", function (event) {
           onScreenshotDone(event.payload);
@@ -648,11 +682,11 @@
 
     const session = findSession(state.selectedId);
     if (!session) {
-      openInfoPrompt("无法发送文件", "请先选择并连接一个会话，再拖入文件发送。");
+      openInfoPrompt(t("无法发送文件"), t("请先选择并连接一个会话，再拖入文件发送。"));
       return;
     }
     if (!session.connected) {
-      openInfoPrompt("无法发送文件", "请先连接当前会话，再拖入文件发送。");
+      openInfoPrompt(t("无法发送文件"), t("请先连接当前会话，再拖入文件发送。"));
       return;
     }
 
@@ -665,8 +699,8 @@
         });
         if (hasFolder) {
           openInfoPrompt(
-            "无法发送文件夹",
-            "不支持直接发送文件夹。请打开文件夹，选中其中的文件后再拖入会话。"
+            t("无法发送文件夹"),
+            t("不支持直接发送文件夹。请打开文件夹，选中其中的文件后再拖入会话。")
           );
           return;
         }
@@ -674,20 +708,20 @@
           return item && item.kind === "file";
         });
         if (!files.length) {
-          openInfoPrompt("无法发送文件", "拖入的内容不是可发送的文件，请重新选择后再试。");
+          openInfoPrompt(t("无法发送文件"), t("拖入的内容不是可发送的文件，请重新选择后再试。"));
           return;
         }
         sendDroppedFiles(session, files);
       })
       .catch(function () {
-        openInfoPrompt("无法发送文件", "读取拖入的文件失败，请重新选择后再试。");
+        openInfoPrompt(t("无法发送文件"), t("读取拖入的文件失败，请重新选择后再试。"));
       });
   }
 
   function handleNasDroppedPaths(paths, position) {
     const drive = selectedDrive();
     if (!drive || !drive.connected || !drive.rpcSessionId) {
-      openInfoPrompt("无法上传文件", "请先连接网盘，再拖入文件上传。");
+      openInfoPrompt(t("无法上传文件"), t("请先连接网盘，再拖入文件上传。"));
       return;
     }
     const hit = hitNasDrop(position);
@@ -700,14 +734,14 @@
           return item && item.kind === "directory";
         });
         if (hasFolder) {
-          openInfoPrompt("无法上传文件夹", "不支持直接上传文件夹。请打开文件夹后，选中其中的文件再拖入。");
+          openInfoPrompt(t("无法上传文件夹"), t("不支持直接上传文件夹。请打开文件夹后，选中其中的文件再拖入。"));
           return;
         }
         const files = items.filter(function (item) {
           return item && item.kind === "file" && !isDragoutDummyPath(item.path);
         });
         if (!files.length) {
-          openInfoPrompt("无法上传文件", "拖入的内容不是可上传的文件，请重新选择后再试。");
+          openInfoPrompt(t("无法上传文件"), t("拖入的内容不是可上传的文件，请重新选择后再试。"));
           return;
         }
         return tauriInvoke("nas_task_upload_many", {
@@ -723,7 +757,7 @@
         });
       })
       .catch(function () {
-        openInfoPrompt("无法上传文件", "读取拖入的文件失败，请重新选择后再试。");
+        openInfoPrompt(t("无法上传文件"), t("读取拖入的文件失败，请重新选择后再试。"));
       });
   }
 
@@ -759,11 +793,11 @@
     if (!isTauri() || state.screenshotBusy) return;
     const session = findSession(state.selectedId);
     if (!session) {
-      openInfoPrompt("无法截图", "请先选择并连接一个会话，再使用截图。");
+      openInfoPrompt(t("无法截图"), t("请先选择并连接一个会话，再使用截图。"));
       return;
     }
     if (!session.connected) {
-      openInfoPrompt("无法截图", "请先连接当前会话，再使用截图。");
+      openInfoPrompt(t("无法截图"), t("请先连接当前会话，再使用截图。"));
       return;
     }
     state.screenshotBusy = true;
@@ -774,9 +808,9 @@
         else if (err && err.message) msg = String(err.message);
         else msg = String(err || "");
         if (!msg || msg === "[object Object]" || msg === "undefined") {
-          msg = "截图失败，请稍后重试。";
+          msg = t("截图失败，请稍后重试。");
         }
-        openInfoPrompt("无法截图", msg);
+        openInfoPrompt(t("无法截图"), msg);
         tauriInvoke("screenshot_cancel").catch(function () {});
       })
       .then(function () {
@@ -809,7 +843,7 @@
     if (!filePath) return;
     const session = findSession(state.selectedId);
     if (!session || !session.connected) {
-      openInfoPrompt("无法发送截图", "当前会话未连接，截图未发送。");
+      openInfoPrompt(t("无法发送截图"), t("当前会话未连接，截图未发送。"));
       return;
     }
     tauriInvoke("file_stat", { path: filePath })
@@ -818,7 +852,7 @@
         sendDroppedFiles(session, [info]);
       })
       .catch(function () {
-        openInfoPrompt("无法发送截图", "读取截图失败，请重新截取后再试。");
+        openInfoPrompt(t("无法发送截图"), t("读取截图失败，请重新截取后再试。"));
       });
   }
 
@@ -828,19 +862,19 @@
     else if (err && err.message) msg = String(err.message);
     else msg = String(err || "");
     if (!msg || msg === "[object Object]" || msg === "undefined") {
-      msg = "语音通话失败，请稍后重试。";
+      msg = t("语音通话失败，请稍后重试。");
     }
-    openInfoPrompt("无法语音通话", msg);
+    openInfoPrompt(t("无法语音通话"), msg);
   }
 
   function startVoiceCall() {
     const session = findSession(state.selectedId);
     if (!session) {
-      openInfoPrompt("无法语音通话", "请先选择并连接一个会话。");
+      openInfoPrompt(t("无法语音通话"), t("请先选择并连接一个会话。"));
       return;
     }
     if (!session.connected || !session.rpcSessionId) {
-      openInfoPrompt("无法语音通话", "请先连接当前会话，再发起语音通话。");
+      openInfoPrompt(t("无法语音通话"), t("请先连接当前会话，再发起语音通话。"));
       return;
     }
     tauriInvoke("voice_invite", { sessionId: session.rpcSessionId }).catch(showVoiceError);
@@ -850,8 +884,8 @@
     const session = state.sessions.find(function (item) {
       return item.rpcSessionId === sessionId;
     });
-    if (session) return session.remark || session.peerToken || fallback || "对方";
-    return fallback || "对方";
+    if (session) return session.remark || session.peerToken || fallback || t("对方");
+    return fallback || t("对方");
   }
 
   function formatVoiceTimer(startedAt) {
@@ -910,10 +944,10 @@
     state.voiceMuted = !!payload.muted;
     if (mute) {
       mute.classList.toggle("is-on", state.voiceMuted);
-      mute.textContent = state.voiceMuted ? "取消静音" : "静音";
+      mute.textContent = state.voiceMuted ? t("取消静音") : t("静音");
     }
     if (phase === "outgoing") {
-      title.textContent = "正在呼叫";
+      title.textContent = t("正在呼叫");
       sub.textContent = name;
       timer.hidden = true;
       accept.hidden = true;
@@ -923,7 +957,7 @@
       mute.hidden = true;
       stopVoiceTimer();
     } else if (phase === "incoming") {
-      title.textContent = "邀请你语音通话";
+      title.textContent = t("邀请你语音通话");
       sub.textContent = name;
       timer.hidden = true;
       accept.hidden = false;
@@ -933,7 +967,7 @@
       mute.hidden = true;
       stopVoiceTimer();
     } else {
-      title.textContent = "语音通话中";
+      title.textContent = t("语音通话中");
       sub.textContent = name;
       timer.hidden = false;
       accept.hidden = true;
@@ -951,23 +985,23 @@
     else if (err && err.message) msg = String(err.message);
     else msg = String(err || "");
     if (!msg || msg === "[object Object]" || msg === "undefined") {
-      msg = "远程控制失败，请稍后重试。";
+      msg = t("远程控制失败，请稍后重试。");
     }
-    openInfoPrompt("无法远程控制", msg);
+    openInfoPrompt(t("无法远程控制"), t(msg));
   }
 
   function startDesktopControl() {
     const session = findSession(state.selectedId);
     if (!session) {
-      openInfoPrompt("无法远程控制", "请先选择并连接一个会话。");
+      openInfoPrompt(t("无法远程控制"), t("请先选择并连接一个会话。"));
       return;
     }
     if (isDrive(session)) {
-      openInfoPrompt("无法远程控制", "远程控制只支持电脑会话。");
+      openInfoPrompt(t("无法远程控制"), t("远程控制只支持电脑会话。"));
       return;
     }
     if (!session.connected || !session.rpcSessionId) {
-      openInfoPrompt("无法远程控制", "请先连接当前会话，再发起远程控制。");
+      openInfoPrompt(t("无法远程控制"), t("请先连接当前会话，再发起远程控制。"));
       return;
     }
     tauriInvoke("desktop_invite", { sessionId: session.rpcSessionId }).catch(showDesktopError);
@@ -988,7 +1022,7 @@
     const root = document.getElementById("desktop-root");
     const btn = document.getElementById("desktop-full");
     if (root) root.classList.toggle("is-full", state.desktopFullscreen);
-    if (btn) btn.textContent = state.desktopFullscreen ? "退出全屏" : "全屏";
+    if (btn) btn.textContent = state.desktopFullscreen ? t("退出全屏") : t("全屏");
     requestAnimationFrame(layoutDesktopCanvas);
   }
 
@@ -1031,7 +1065,7 @@
       state.desktopPendingJpeg = null;
       if (stage) stage.hidden = true;
       if (placeholder) placeholder.hidden = false;
-      if (btn) btn.textContent = "远程控制";
+      if (btn) btn.textContent = t("远程控制");
       if (payload && payload.error) showDesktopError(payload.error);
       return;
     }
@@ -1041,7 +1075,7 @@
     root.classList.toggle("is-ring", phase === "outgoing" || phase === "incoming");
     root.classList.toggle("is-live", phase === "controlling" || phase === "controlled");
     if (btn) {
-      btn.textContent = phase === "idle" ? "远程控制" : "结束控制";
+      btn.textContent = phase === "idle" ? t("远程控制") : t("结束控制");
     }
     if (cancel) cancel.hidden = phase !== "outgoing";
     if (reject) reject.hidden = phase !== "incoming";
@@ -1054,19 +1088,19 @@
       stats.textContent = formatDesktopStats(payload);
     }
     if (phase === "outgoing") {
-      if (title) title.textContent = "正在请求远程控制";
+      if (title) title.textContent = t("正在请求远程控制");
       if (sub) sub.textContent = name;
       if (stage) stage.hidden = true;
     } else if (phase === "incoming") {
-      if (title) title.textContent = "请求远程控制你的电脑";
-      if (sub) sub.textContent = name + " 想查看你的桌面";
+      if (title) title.textContent = t("请求远程控制你的电脑");
+      if (sub) sub.textContent = t("{name} 想查看你的桌面", { name: name });
       if (stage) stage.hidden = true;
     } else if (phase === "controlled") {
-      if (title) title.textContent = "正在被远程控制";
-      if (sub) sub.textContent = name + " 正在控制你的电脑，你也可以继续使用";
+      if (title) title.textContent = t("正在被远程控制");
+      if (sub) sub.textContent = t("{name} 正在控制你的电脑，你也可以继续使用", { name: name });
       if (stage) stage.hidden = true;
     } else {
-      if (title) title.textContent = "对方桌面";
+      if (title) title.textContent = t("对方桌面");
       if (sub) sub.textContent = name;
       if (stage) stage.hidden = false;
       if (placeholder) placeholder.hidden = !(state.desktopFrameW && state.desktopFrameH);
@@ -1318,6 +1352,34 @@
     event.preventDefault();
     submitLogin();
   });
+  if (quickRegisterBtn) {
+    if (!isTauri()) quickRegisterBtn.hidden = true;
+    quickRegisterBtn.addEventListener("click", startQuickRegister);
+  }
+  if (registerProgressClose) {
+    registerProgressClose.addEventListener("click", closeRegisterProgressModal);
+  }
+  if (registerProgressLogin) {
+    registerProgressLogin.addEventListener("click", confirmRegisterLogin);
+  }
+  if (registerProgressLater) {
+    registerProgressLater.addEventListener("click", closeRegisterProgressModal);
+  }
+  if (accountRenewBtn) {
+    accountRenewBtn.addEventListener("click", openRenewDialog);
+  }
+  if (infoTokenExpiry) {
+    infoTokenExpiry.addEventListener("click", function () {
+      if (
+        state.portalLink &&
+        state.portalLink.autoRegistered &&
+        shouldShowRenewBanner(state.portalExpiryMs)
+      ) {
+        openRenewDialog();
+      }
+    });
+  }
+  bindPortalVisibility();
   try {
     bindWorkspaceEvents();
   } catch (err) {
@@ -1325,6 +1387,399 @@
   }
   initTauriShell();
   bindSessionSizeListener();
+  if (window.F2F_I18N && window.F2F_I18N.onChange) {
+    window.F2F_I18N.onChange(function () {
+      refreshTranslatedUi();
+    });
+  }
+
+  function syncPasswordToggleLabel(buttonId, input, showKey, hideKey) {
+    const btn = document.getElementById(buttonId);
+    if (!btn || !input) return;
+    const hidden = input.type === "password";
+    btn.textContent = hidden ? t("显示") : t("隐藏");
+    btn.setAttribute("aria-label", hidden ? t(showKey) : t(hideKey));
+  }
+
+  function refreshTranslatedUi() {
+    if (window.F2F_I18N) window.F2F_I18N.applyDom();
+    syncPasswordToggleLabel("toggle-password", passwordInput, "显示密码", "隐藏密码");
+    syncPasswordToggleLabel("toggle-passphrase", passphraseInput, "显示认证口令", "隐藏认证口令");
+    syncPasswordToggleLabel("toggle-connect-pass", connectPeerPass, "显示认证口令", "隐藏认证口令");
+    if (loginBtn) setLoggingIn(!!loginBtn.disabled && pageLogin && !pageLogin.hidden);
+    renderTokenDropdown();
+    if (!state.user) return;
+    if (infoPassphrase && state.user) {
+      infoPassphrase.textContent = state.user.passphrase ? state.user.passphrase : t("未设置");
+    }
+    renderAccountRemark();
+    const statusEl = document.getElementById("info-login-status");
+    if (statusEl) statusEl.textContent = t("已登录");
+    updatePortalExpiryUi();
+    renderWorkspace();
+    renderOfficeDock();
+    const focused = focusedOfficeDoc();
+    if (focused && nasOfficeEl && !nasOfficeEl.hidden) refreshOfficeOverlay(focused);
+  }
+
+  function maskToken(token) {
+    const text = String(token || "");
+    if (text.length <= 12) return text;
+    return text.slice(0, 8) + "…" + text.slice(-4);
+  }
+
+  function generatePassphrase() {
+    let out = "";
+    for (let i = 0; i < 10; i += 1) {
+      out += String(Math.floor(Math.random() * 10));
+    }
+    return out;
+  }
+
+  function updateRegisterProgressDesc(step) {
+    if (!registerProgressDesc) return;
+    if (step === "register") registerProgressDesc.textContent = t("正在创建 webrpc 账户…");
+    else if (step === "login") registerProgressDesc.textContent = t("正在登录控制台…");
+    else if (step === "tokens") registerProgressDesc.textContent = t("正在领取免费 Token…");
+    else if (step === "done") registerProgressDesc.textContent = t("注册成功！Token、密码与认证口令已填入下方登录框，请确认后登录。");
+    else registerProgressDesc.textContent = t("正在创建 webrpc 账户，请稍候…");
+  }
+
+  function resetRegisterProgressModal() {
+    state.registerPending = null;
+    if (registerProgressTitle) registerProgressTitle.textContent = t("正在注册");
+    updateRegisterProgressDesc("register");
+    if (registerProgressBody) registerProgressBody.hidden = false;
+    if (registerSuccessPanel) registerSuccessPanel.hidden = true;
+    if (registerProgressError) {
+      registerProgressError.hidden = true;
+      registerProgressError.textContent = "";
+    }
+    if (registerProgressLogin) registerProgressLogin.hidden = true;
+    if (registerProgressLater) registerProgressLater.hidden = true;
+    if (registerProgressClose) registerProgressClose.hidden = true;
+    setRegisterProgressBusy(true);
+    setRegisterStep("register");
+  }
+
+  function setRegisterStep(step) {
+    if (!registerProgressSteps) return;
+    const order = ["register", "login", "tokens", "done"];
+    const idx = order.indexOf(step);
+    registerProgressSteps.querySelectorAll("li").forEach(function (li) {
+      const s = li.getAttribute("data-step");
+      const si = order.indexOf(s);
+      if (step === "done") {
+        li.classList.add("is-done");
+        li.classList.remove("is-active");
+        return;
+      }
+      li.classList.toggle("is-done", si >= 0 && si < idx);
+      li.classList.toggle("is-active", s === step);
+    });
+    updateRegisterProgressDesc(step);
+  }
+
+  function openRegisterProgressModal() {
+    if (!modalRoot || !modalRegisterProgress) return;
+    resetRegisterProgressModal();
+    if (quickRegisterBtn) quickRegisterBtn.disabled = true;
+    modalRoot.hidden = false;
+    modalRegisterProgress.hidden = false;
+  }
+
+  function setRegisterProgressBusy(busy) {
+    if (registerProgressSpinner) registerProgressSpinner.hidden = !busy;
+  }
+
+  function failRegisterProgress(message) {
+    setRegisterProgressBusy(false);
+    if (registerProgressTitle) registerProgressTitle.textContent = t("正在注册");
+    if (registerProgressBody) registerProgressBody.hidden = false;
+    if (registerSuccessPanel) registerSuccessPanel.hidden = true;
+    if (registerProgressLogin) registerProgressLogin.hidden = true;
+    if (registerProgressLater) registerProgressLater.hidden = true;
+    registerProgressError.textContent = message;
+    registerProgressError.hidden = false;
+    registerProgressClose.hidden = false;
+  }
+
+  function showRegisterSuccess(result, passphrase) {
+    const deviceToken = result.deviceToken || "";
+    const devicePassword = result.devicePassword || "";
+    const expireTimeMs = Number(result.expireTimeMs) || 0;
+    const credentials = {
+      token: deviceToken,
+      password: devicePassword,
+      passphrase: passphrase,
+    };
+
+    tokenInput.value = deviceToken;
+    passwordInput.value = devicePassword;
+    passphraseInput.value = passphrase;
+    saveTokenInput.checked = true;
+
+    state.portalLink = {
+      autoRegistered: true,
+      tokenExpireMs: expireTimeMs,
+    };
+    state.portalExpiryMs = expireTimeMs;
+    state.registerPending = credentials;
+
+    setRegisterStep("done");
+    setRegisterProgressBusy(false);
+    if (registerProgressTitle) registerProgressTitle.textContent = t("注册成功");
+    if (registerProgressBody) registerProgressBody.hidden = true;
+    if (registerSuccessPanel) registerSuccessPanel.hidden = false;
+    if (registerSuccessToken) registerSuccessToken.textContent = maskToken(deviceToken);
+    if (registerSuccessPassphrase) registerSuccessPassphrase.textContent = passphrase;
+    if (registerSuccessExpiry) {
+      registerSuccessExpiry.textContent = expireTimeMs > 0 ? formatDateTime(expireTimeMs) : "—";
+    }
+    if (registerProgressLogin) registerProgressLogin.hidden = false;
+    if (registerProgressLater) registerProgressLater.hidden = false;
+    if (registerProgressClose) registerProgressClose.hidden = true;
+    updateRegisterProgressDesc("done");
+  }
+
+  function confirmRegisterLogin() {
+    const credentials = state.registerPending;
+    closeRegisterProgressModal();
+    if (!credentials || !credentials.token || !credentials.password) return;
+    hideLoginError();
+    setLoggingIn(true);
+    authenticate(credentials)
+      .then(function () {
+        return persistAccount(credentials).catch(function () {});
+      })
+      .then(function () {
+        passwordInput.value = "";
+        passphraseInput.value = "";
+        enterWorkspace(credentials);
+      })
+      .catch(function () {
+        showLoginError(t("登陆失败,请检查网络或者token与密码是否正确"));
+        setLoggingIn(false);
+      });
+  }
+
+  function closeRegisterProgressModal() {
+    setRegisterProgressBusy(false);
+    state.registerPending = null;
+    if (quickRegisterBtn) quickRegisterBtn.disabled = false;
+    if (modalRegisterProgress) modalRegisterProgress.hidden = true;
+    if (
+      modalRoot &&
+      modalNew.hidden &&
+      (!modalNewDrive || modalNewDrive.hidden) &&
+      modalRemark.hidden &&
+      modalConfirm.hidden &&
+      (!modalNasCreate || modalNasCreate.hidden) &&
+      (!modalNasMove || modalNasMove.hidden) &&
+      (!modalNasZip || modalNasZip.hidden)
+    ) {
+      modalRoot.hidden = true;
+    }
+  }
+
+  function registerErrorMessage(err) {
+    const text = invokeErrorText(err);
+    if (text.indexOf("register-timeout") >= 0) return t("注册超时，请稍后重试");
+    if (text.indexOf("tokens-not-ready") >= 0) return t("Token 尚未就绪，请稍后重试");
+    return t("注册失败，请检查网络后重试");
+  }
+
+  function withRegisterTimeout(promise) {
+    return new Promise(function (resolve, reject) {
+      var timer = window.setTimeout(function () {
+        reject(new Error("register-timeout"));
+      }, REGISTER_TIMEOUT_MS);
+      promise.then(
+        function (value) {
+          window.clearTimeout(timer);
+          resolve(value);
+        },
+        function (err) {
+          window.clearTimeout(timer);
+          reject(err);
+        }
+      );
+    });
+  }
+
+  function startQuickRegister() {
+    if (!isTauri() || !quickRegisterBtn || quickRegisterBtn.disabled || loginBtn.disabled) return;
+    quickRegisterBtn.disabled = true;
+    openRegisterProgressModal();
+    const passphrase = generatePassphrase();
+    withRegisterTimeout(tauriInvoke("webrpc_auto_register"))
+      .then(function (result) {
+        showRegisterSuccess(result, passphrase);
+      })
+      .catch(function (err) {
+        failRegisterProgress(registerErrorMessage(err));
+      });
+  }
+
+  function daysUntilExpiry(ms) {
+    if (!ms) return Infinity;
+    return (ms - Date.now()) / (24 * 60 * 60 * 1000);
+  }
+
+  function shouldShowRenewBanner(ms) {
+    const days = daysUntilExpiry(ms);
+    return days > 0 && days <= PORTAL_EXPIRY_WARN_DAYS;
+  }
+
+  function loadPortalLinkForUser() {
+    if (!state.user || !state.user.token) return Promise.resolve(null);
+    return tauriInvoke("portal_link_get", { deviceToken: state.user.token })
+      .then(function (link) {
+        if (link && link.autoRegistered) {
+          state.portalLink = {
+            autoRegistered: true,
+            tokenExpireMs: Number(link.tokenExpireMs) || 0,
+          };
+          state.portalExpiryMs = state.portalLink.tokenExpireMs;
+        } else {
+          state.portalLink = null;
+          state.portalExpiryMs = 0;
+        }
+        updatePortalExpiryUi();
+        return state.portalLink;
+      })
+      .catch(function () {
+        state.portalLink = null;
+        state.portalExpiryMs = 0;
+        updatePortalExpiryUi();
+        return null;
+      });
+  }
+
+  function refreshPortalExpiry() {
+    if (!state.user || !state.portalLink || !state.portalLink.autoRegistered) {
+      return Promise.resolve();
+    }
+    return tauriInvoke("portal_refresh_expiry", { deviceToken: state.user.token })
+      .then(function (ms) {
+        state.portalExpiryMs = Number(ms) || 0;
+        if (state.portalLink) state.portalLink.tokenExpireMs = state.portalExpiryMs;
+        updatePortalExpiryUi();
+      })
+      .catch(function () {});
+  }
+
+  function stopPortalExpiryTimer() {
+    if (state.portalExpiryTimer) {
+      clearInterval(state.portalExpiryTimer);
+      state.portalExpiryTimer = null;
+    }
+  }
+
+  function startPortalExpiryTimer() {
+    stopPortalExpiryTimer();
+    if (!state.portalLink || !state.portalLink.autoRegistered) return;
+    state.portalExpiryTimer = window.setInterval(function () {
+      refreshPortalExpiry();
+    }, PORTAL_EXPIRY_REFRESH_MS);
+  }
+
+  function bindPortalVisibility() {
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden && state.user && state.portalLink && state.portalLink.autoRegistered) {
+        refreshPortalExpiry();
+      }
+    });
+  }
+
+  function updatePortalExpiryUi() {
+    const show = !!(state.portalLink && state.portalLink.autoRegistered && state.portalExpiryMs > 0);
+    if (accountItemTokenExpiry) accountItemTokenExpiry.hidden = !show;
+    if (infoTokenExpiry) {
+      if (!show) {
+        infoTokenExpiry.textContent = "—";
+        infoTokenExpiry.classList.remove("is-expiry-warn");
+        infoTokenExpiry.style.cursor = "";
+      } else {
+        infoTokenExpiry.textContent = formatDateTime(state.portalExpiryMs);
+        const warn = shouldShowRenewBanner(state.portalExpiryMs);
+        infoTokenExpiry.classList.toggle("is-expiry-warn", warn);
+        infoTokenExpiry.style.cursor = warn ? "pointer" : "";
+      }
+    }
+    if (accountRenewBanner && accountRenewText) {
+      const warn = show && shouldShowRenewBanner(state.portalExpiryMs);
+      accountRenewBanner.hidden = !warn;
+      if (warn) {
+        accountRenewText.textContent = t("您的 Token 将在 {date} 过期（剩余 {days} 天），请及时续费。", {
+          date: formatDateTime(state.portalExpiryMs),
+          days: String(Math.max(1, Math.ceil(daysUntilExpiry(state.portalExpiryMs)))),
+        });
+      }
+    }
+    updatePortalManageButton();
+  }
+
+  function updatePortalManageButton() {
+    if (!btnManageToken) return;
+    const show = !!(state.user && state.portalLink && state.portalLink.autoRegistered);
+    btnManageToken.hidden = !show;
+  }
+
+  function showPortalConsoleError() {
+    state.confirmKind = "info";
+    confirmTitle.textContent = t("管理 Token");
+    confirmDesc.textContent = t("无法打开控制台，请检查网络后重试");
+    confirmOkBtn.textContent = t("关闭");
+    confirmOkBtn.className = "btn-primary";
+    if (confirmCancelBtn) confirmCancelBtn.hidden = true;
+    openModal("confirm");
+  }
+
+  function openPortalConsole() {
+    if (!isTauri() || !state.user || !state.user.token || !btnManageToken || btnManageToken.disabled) {
+      return;
+    }
+    const oldText = btnManageToken.textContent;
+    btnManageToken.disabled = true;
+    btnManageToken.textContent = t("正在打开 webrpc 控制台…");
+    tauriInvoke("portal_open_console", { deviceToken: state.user.token })
+      .catch(function () {
+        showPortalConsoleError();
+      })
+      .finally(function () {
+        btnManageToken.disabled = false;
+        btnManageToken.textContent = oldText;
+      });
+  }
+
+  function openPortalOrders() {
+    if (state.portalLink && state.portalLink.autoRegistered && state.user && isTauri()) {
+      openPortalConsole();
+      return;
+    }
+    if (window.__TAURI__ && window.__TAURI__.opener) {
+      window.__TAURI__.opener.openUrl(PORTAL_ORDERS_URL);
+      return;
+    }
+    window.open(PORTAL_ORDERS_URL, "_blank", "noopener,noreferrer");
+  }
+
+  function openRenewDialog() {
+    state.confirmKind = "renew-token";
+    confirmTitle.textContent = t("Token 续费提醒");
+    confirmDesc.textContent =
+      t("到期时间：{date}", { date: formatDateTime(state.portalExpiryMs) }) +
+      "\n" +
+      t("是否前往 webrpc 控制台续费？");
+    confirmOkBtn.textContent = t("前往续费");
+    confirmOkBtn.className = "btn-primary";
+    if (confirmCancelBtn) {
+      confirmCancelBtn.hidden = false;
+      confirmCancelBtn.textContent = t("稍后");
+    }
+    openModal("confirm");
+  }
 
   function persistAccount(credentials) {
     if (!saveTokenInput.checked) {
@@ -1400,29 +1855,74 @@
     const accounts = state.savedAccounts;
     if (!accounts.length) {
       tokenDropdownList.innerHTML =
-        '<li class="token-dropdown-empty">暂无已保存的 Token</li>';
+        '<li class="token-dropdown-empty">' + t("暂无已保存的 Token") + "</li>";
       return;
     }
 
     tokenDropdownList.innerHTML = accounts
       .map(function (item, index) {
-        const safe = escapeHtml(item.token || "");
+        const tokenText = escapeHtml(item.token || "");
+        const remarkText = String(item.remark || "").trim();
+        const remarkHtml = remarkText
+          ? '<span class="token-dropdown-remark">' + escapeHtml(remarkText) + "</span>"
+          : "";
+        const title = remarkText ? item.token + " · " + remarkText : item.token || "";
         return (
           '<li class="token-dropdown-item">' +
           '<button type="button" class="token-dropdown-pick" data-pick-index="' +
           index +
           '" title="' +
-          safe +
+          escapeHtml(title) +
           '">' +
-          safe +
+          '<span class="token-dropdown-token">' +
+          tokenText +
+          "</span>" +
+          remarkHtml +
           "</button>" +
           '<button type="button" class="token-dropdown-del" data-delete-index="' +
           index +
-          '">删除</button>' +
+          '">' +
+          t("删除") +
+          "</button>" +
           "</li>"
         );
       })
       .join("");
+  }
+
+  function currentAccountRemark() {
+    if (!state.user || !state.user.token) return "";
+    const found = state.savedAccounts.find(function (item) {
+      return item.token === state.user.token;
+    });
+    return found && found.remark ? String(found.remark).trim() : "";
+  }
+
+  function renderAccountRemark() {
+    if (!infoAccountRemark) return;
+    const row = infoAccountRemark.closest(".account-item-account-remark");
+    const saved = !!(
+      state.user &&
+      state.savedAccounts.some(function (item) {
+        return item.token === state.user.token;
+      })
+    );
+    if (row) row.hidden = !saved;
+    if (!saved) return;
+    const remark = currentAccountRemark();
+    infoAccountRemark.textContent = remark || t("未设置");
+    infoAccountRemark.title = remark || t("设置账号备注");
+  }
+
+  function openAccountRemark() {
+    if (!state.user || !state.user.token) return;
+    state.remarkKind = "account";
+    state.remarkSessionId = null;
+    remarkInput.value = currentAccountRemark();
+    const remarkTitle = document.getElementById("remark-title");
+    if (remarkTitle) remarkTitle.textContent = t("设置账号备注");
+    remarkInput.placeholder = t("例如：办公室 NAS");
+    openModal("remark");
   }
 
   function fillFromSavedAccount(index) {
@@ -1456,14 +1956,14 @@
     btn.addEventListener("click", function () {
       const hidden = input.type === "password";
       input.type = hidden ? "text" : "password";
-      btn.textContent = hidden ? "隐藏" : "显示";
-      btn.setAttribute("aria-label", hidden ? "隐藏" : "显示");
+      btn.textContent = hidden ? t("隐藏") : t("显示");
+      btn.setAttribute("aria-label", hidden ? t("隐藏") : t("显示"));
     });
   }
 
   function setLoggingIn(busy) {
     loginBtn.disabled = busy;
-    loginBtn.textContent = busy ? "登录中..." : "登录";
+    loginBtn.textContent = busy ? t("登录中...") : t("登录");
   }
 
   function showLoginError(message) {
@@ -1514,7 +2014,7 @@
     };
 
     if (!credentials.token || !credentials.password) {
-      showLoginError("Token 和密码不能为空");
+      showLoginError(t("Token 和密码不能为空"));
       return;
     }
 
@@ -1532,7 +2032,7 @@
         enterWorkspace(credentials);
       })
       .catch(function () {
-        showLoginError("登陆失败,请检查网络或者token与密码是否正确");
+        showLoginError(t("登陆失败,请检查网络或者token与密码是否正确"));
         setLoggingIn(false);
       });
   }
@@ -1567,6 +2067,13 @@
 
     renderAccount();
     renderWorkspace();
+    loadSavedAccounts();
+    loadPortalLinkForUser().then(function (link) {
+      if (link && link.autoRegistered) {
+        startPortalExpiryTimer();
+        refreshPortalExpiry();
+      }
+    });
     Promise.all([loadSavedSessions(), loadSavedDrives()]).then(function () {
       if (!state.selectedId) {
         const first = state.sessions[0] || state.drives[0];
@@ -1578,6 +2085,12 @@
   }
 
   function logout() {
+    stopPortalExpiryTimer();
+    state.portalLink = null;
+    state.portalExpiryMs = 0;
+    if (accountItemTokenExpiry) accountItemTokenExpiry.hidden = true;
+    if (accountRenewBanner) accountRenewBanner.hidden = true;
+    if (btnManageToken) btnManageToken.hidden = true;
     tauriInvoke("webrpc_logout").catch(function () {});
 
     stopAllTicks();
@@ -1941,7 +2454,12 @@
   function invokeErrorText(err) {
     if (err == null) return "";
     if (typeof err === "string") return err;
-    return String(err.message || err);
+    if (typeof err.message === "string" && err.message) return err.message;
+    if (typeof err.toString === "function") {
+      const text = String(err.toString());
+      if (text && text !== "[object Object]") return text;
+    }
+    return String(err);
   }
 
   function onPeerHello(payload) {
@@ -2202,8 +2720,8 @@
     session.nasWatching = false;
     session.rpcSessionId = 0;
     session.connectError = isDrive(session)
-      ? "网盘已断开连接，请重新连接。"
-      : "对端已断开连接，请重新连接。";
+      ? t("网盘已断开连接，请重新连接。")
+      : t("对端已断开连接，请重新连接。");
     if (isDrive(session)) {
       closeNasPreview();
       if (nasEditorCtl.sessionId === sid) forceCloseNasEditor();
@@ -2660,7 +3178,7 @@
     }
     if (!nasTaskList) return;
     if (!tasks.length) {
-      nasTaskList.innerHTML = '<div class="nas-task-empty">暂无任务</div>';
+      nasTaskList.innerHTML = '<div class="nas-task-empty">' + t("暂无任务") + "</div>";
       return;
     }
     nasTaskList.innerHTML = tasks
@@ -2671,11 +3189,11 @@
   }
 
   function nasTaskStatusText(status) {
-    if (status === "queued") return "排队中";
-    if (status === "running") return "进行中";
-    if (status === "done") return "已完成";
-    if (status === "interrupted") return "已中断";
-    return "失败";
+    if (status === "queued") return t("排队中");
+    if (status === "running") return t("进行中");
+    if (status === "done") return t("已完成");
+    if (status === "interrupted") return t("已中断");
+    return t("失败");
   }
 
   function renderNasTaskItem(task) {
@@ -2686,20 +3204,20 @@
     const statusCls = status === "running" || status === "queued" ? " is-run" : status === "done" ? "" : " is-fail";
     const retry =
       status === "failed" || status === "interrupted"
-        ? '<button type="button" data-nas-task-retry>重试</button>'
+        ? '<button type="button" data-nas-task-retry>' + t("重试") + "</button>"
         : "";
-    const folder = '<button type="button" data-nas-task-folder>文件夹</button>';
+    const folder = '<button type="button" data-nas-task-folder>' + t("文件夹") + "</button>";
     const running = status === "running";
     const del =
       '<button type="button" class="nas-task-del" data-nas-task-delete' +
-      (running ? " disabled title=\"进行中的任务不能删除\"" : ' title="删除此任务"') +
-      ' aria-label="删除此任务">×</button>';
+      (running ? ' disabled title="' + t("进行中的任务不能删除") + '"' : ' title="' + t("删除此任务") + '"') +
+      ' aria-label="' + t("删除此任务") + '">×</button>';
     const elapsed = formatDuration(task.elapsedMs || 0);
     const speed = formatSpeed(task.speedBps || 0);
     const stats =
       status === "queued"
         ? ""
-        : " · 耗时 " + elapsed + " · 平均 " + speed;
+        : t(" · 耗时 {elapsed} · 平均 {speed}", { elapsed: elapsed, speed: speed });
     const err = status !== "done" && task.error ? " · " + String(task.error) : "";
     return (
       '<div class="nas-task' +
@@ -2709,7 +3227,7 @@
       '"><div class="nas-task-top"><span class="nas-task-kind' +
       (down ? " is-down" : "") +
       '">' +
-      (down ? "下载" : "上传") +
+      (down ? t("下载") : t("上传")) +
       '</span><span class="nas-task-name" title="' +
       escapeHtml(task.name || "") +
       '">' +
@@ -2890,7 +3408,7 @@
     updateNasDragGhost(position, valid ? hit : null);
     if (nasDropMask && !nasDropMask.hidden && nasDropHint && !isMove) {
       nasDropHint.textContent =
-        hit && hit.name ? "松开即可上传到 " + hit.name : "松开即可上传到当前目录";
+        hit && hit.name ? t("松开即可上传到 {name}", { name: hit.name }) : t("松开即可上传到当前目录");
     }
   }
 
@@ -3047,11 +3565,11 @@
 
   function nasMoveFailReason(code) {
     const key = String(code || "");
-    if (key === "exists") return "目标位置已存在同名文件或文件夹";
-    if (key === "missing") return "源文件不存在，可能已被删除或移动";
-    if (key === "invalid") return "不能移动到该位置";
+    if (key === "exists") return t("目标位置已存在同名文件或文件夹");
+    if (key === "missing") return t("源文件不存在，可能已被删除或移动");
+    if (key === "invalid") return t("不能移动到该位置");
     if (key.indexOf("不能") >= 0 || key.indexOf("已在") >= 0) return key;
-    return "移动失败，请稍后重试";
+    return t("移动失败，请稍后重试");
   }
 
   function setConfirmFailList(fails, reasonFn) {
@@ -3065,7 +3583,7 @@
     confirmFailList.hidden = false;
     confirmFailList.innerHTML = fails
       .map(function (item) {
-        const name = item && item.name ? String(item.name) : "(未命名)";
+        const name = item && item.name ? String(item.name) : t("(未命名)");
         const reason = format(item && (item.error || item.reason));
         return "<li><strong>" + escapeHtml(name) + "</strong>：" + escapeHtml(reason) + "</li>";
       })
@@ -3079,16 +3597,16 @@
     if (!list.length) return;
     state.confirmKind = "info";
     if (list.length === 1) {
-      confirmTitle.textContent = "无法移动";
+      confirmTitle.textContent = t("无法移动");
       confirmDesc.textContent =
         "「" + (list[0].name || "") + "」" + nasMoveFailReason(list[0].error);
       setConfirmFailList([]);
     } else {
-      confirmTitle.textContent = "部分项目未能移动";
-      confirmDesc.textContent = "以下项目没有移动成功：";
+      confirmTitle.textContent = t("部分项目未能移动");
+      confirmDesc.textContent = t("以下项目没有移动成功：");
       setConfirmFailList(list);
     }
-    confirmOkBtn.textContent = "知道了";
+    confirmOkBtn.textContent = t("知道了");
     confirmOkBtn.className = "btn-primary";
     if (confirmCancelBtn) confirmCancelBtn.hidden = true;
     openModal("confirm");
@@ -3106,9 +3624,9 @@
     const from = normalizeNasPath(fromPath);
     const to = normalizeNasPath(targetDir);
     const src = joinNasPath(from, name);
-    if (to === from) return "已在该目录，无需移动";
-    if (to === src) return "不能将文件夹移动到自身";
-    if (isDir && (to + "/").indexOf(src + "/") === 0) return "不能将文件夹移动到自身或子目录中";
+    if (to === from) return t("已在该目录，无需移动");
+    if (to === src) return t("不能将文件夹移动到自身");
+    if (isDir && (to + "/").indexOf(src + "/") === 0) return t("不能将文件夹移动到自身或子目录中");
     return "";
   }
 
@@ -3146,7 +3664,7 @@
       }
       return;
     }
-    openInfoPrompt("无法移动", message);
+    openInfoPrompt(t("无法移动"), message);
   }
 
   function moveNasEntries(items, fromPath, targetDir, source, extraFails) {
@@ -3178,7 +3696,7 @@
     }).catch(function () {
       if (nasMoveCtl.seq !== seq) return;
       reportNasMoveFail(
-        "移动失败，请稍后重试。",
+        t("移动失败，请稍后重试。"),
         list.map(function (item) {
           return { name: item.name, error: "failed" };
         }).concat(blocked)
@@ -3187,7 +3705,7 @@
     window.setTimeout(function () {
       if (nasMoveCtl.seq !== seq || !nasMoveCtl.busy) return;
       reportNasMoveFail(
-        "移动超时，请稍后重试。",
+        t("移动超时，请稍后重试。"),
         list.map(function (item) {
           return { name: item.name, error: "failed" };
         }).concat(blocked)
@@ -3222,7 +3740,9 @@
     }
     if (nasDragGhostName) {
       nasDragGhostName.textContent =
-        items.length > 1 ? (first.name || "") + " 等 " + items.length + " 项" : first.name || bundle.name || "";
+        items.length > 1
+          ? t("{name} 等 {n} 项", { name: first.name || bundle.name || "", n: items.length })
+          : first.name || bundle.name || "";
     }
     nasDragGhost.hidden = false;
     updateNasDragGhost({ x: x, y: y }, null);
@@ -3242,9 +3762,9 @@
       const count = bundle && bundle.items ? bundle.items.length : 1;
       nasDragGhostTip.textContent = valid
         ? count > 1
-          ? "移动 " + count + " 项到「" + hit.name + "」"
-          : "移动到「" + hit.name + "」"
-        : "拖到文件夹后松开即可移动";
+          ? t("移动 {n} 项到「{name}」", { n: count, name: hit.name })
+          : t("移动到「{name}」", { name: hit.name })
+        : t("拖到文件夹后松开即可移动");
     }
   }
 
@@ -3473,7 +3993,7 @@
   function showNasCreateError(text) {
     if (!nasCreateError) return;
     nasCreateError.hidden = false;
-    nasCreateError.textContent = text || "创建失败";
+    nasCreateError.textContent = text || t("创建失败");
   }
 
   function hideNasMoveError() {
@@ -3485,7 +4005,7 @@
   function showNasMoveError(text) {
     if (!nasMoveError) return;
     nasMoveError.hidden = false;
-    nasMoveError.textContent = text || "无法移动到该位置";
+    nasMoveError.textContent = text || t("无法移动到该位置");
   }
 
   function resetNasMovePicker() {
@@ -3533,18 +4053,18 @@
     }
     if (nasMoveUp) nasMoveUp.disabled = normalizeNasPath(nasMovePicker.path || "/") === "/";
     if (nasMovePicker.loading) {
-      nasMoveList.innerHTML = '<div class="nas-move-empty">正在加载目录…</div>';
+      nasMoveList.innerHTML = '<div class="nas-move-empty">' + t("正在加载目录…") + "</div>";
       return;
     }
     if (nasMovePicker.listError) {
       nasMoveList.innerHTML =
-        '<div class="nas-move-empty">' + escapeHtml(nasMovePicker.listError) + "</div>";
+        '<div class="nas-move-empty">' + escapeHtml(t(nasMovePicker.listError)) + "</div>";
       return;
     }
     const folders = nasMovePicker.folders || [];
     if (!folders.length) {
       nasMoveList.innerHTML =
-        '<div class="nas-move-empty">当前目录没有文件夹，可以直接确定以移动到这里。</div>';
+        '<div class="nas-move-empty">' + t("当前目录没有文件夹，可以直接确定以移动到这里。") + "</div>";
       return;
     }
     nasMoveList.innerHTML = folders
@@ -3578,13 +4098,13 @@
     }).catch(function () {
       if (nasMovePicker.seq !== seq) return;
       nasMovePicker.loading = false;
-      nasMovePicker.listError = "无法加载目录";
+      nasMovePicker.listError = t("无法加载目录");
       renderNasMovePicker();
     });
     window.setTimeout(function () {
       if (nasMovePicker.seq !== seq || !nasMovePicker.loading) return;
       nasMovePicker.loading = false;
-      nasMovePicker.listError = "目录列表请求超时";
+      nasMovePicker.listError = t("目录列表请求超时");
       renderNasMovePicker();
     }, 12000);
   }
@@ -3621,12 +4141,12 @@
     if (nasMoveHint) {
       nasMoveHint.textContent =
         list.length > 1
-          ? "将已选的 " +
-            list.length +
-            " 个项目移动到下面打开的目录。可编辑路径后回车或点「打开」进入，双击文件夹进入子目录。点「确定」后移动到当前打开的目录。"
-          : "将「" +
-            list[0].name +
-            "」移动到下面打开的目录。可编辑路径后回车或点「打开」进入，双击文件夹进入子目录。点「确定」后移动到当前打开的目录。";
+          ? t("将已选的 {n} 个项目移动到下面打开的目录。可编辑路径后回车或点「打开」进入，双击文件夹进入子目录。点「确定」后移动到当前打开的目录。", {
+              n: list.length,
+            })
+          : t("将「{name}」移动到下面打开的目录。可编辑路径后回车或点「打开」进入，双击文件夹进入子目录。点「确定」后移动到当前打开的目录。", {
+              name: list[0].name,
+            });
     }
     hideNasMoveError();
     if (nasMoveOk) nasMoveOk.disabled = false;
@@ -3655,7 +4175,7 @@
           ? [{ name: nasMovePicker.name, isDir: nasMovePicker.isDir }]
           : [];
     if (!items.length) {
-      showNasMoveError("未选择要移动的项目");
+      showNasMoveError(t("未选择要移动的项目"));
       return;
     }
     const to = normalizeNasPath(nasMovePath ? nasMovePath.value : nasMovePicker.path);
@@ -3710,13 +4230,13 @@
 
   function validateNasCreateName(kind, raw) {
     const name = String(raw || "").trim();
-    if (!name) return kind === "folder" ? "请填写文件夹名" : "请填写文件名";
-    if (/[\\/:*?"<>|\u0000]/.test(name)) return "名称不能包含特殊字符";
-    if (name === "." || name === ".." || name.charAt(0) === ".") return "名称不能以点开头";
+    if (!name) return kind === "folder" ? t("请填写文件夹名") : t("请填写文件名");
+    if (/[\\/:*?"<>|\u0000]/.test(name)) return t("名称不能包含特殊字符");
+    if (name === "." || name === ".." || name.charAt(0) === ".") return t("名称不能以点开头");
     if (kind === "file") {
-      if (!nasCreateHasExt(name)) return "文件必须填写扩展名，例如 readme.txt";
+      if (!nasCreateHasExt(name)) return t("文件必须填写扩展名，例如 readme.txt");
     } else if (name.indexOf(".") >= 0) {
-      return "文件夹不能包含扩展名，请不要使用点号";
+      return t("文件夹不能包含扩展名，请不要使用点号");
     }
     return "";
   }
@@ -3729,15 +4249,15 @@
     if (nasCreateOk) nasCreateOk.disabled = false;
     hideNasCreateError();
     if (nasCreateCtl.kind === "folder") {
-      if (nasCreateTitle) nasCreateTitle.textContent = "新建文件夹";
-      if (nasCreateLabel) nasCreateLabel.textContent = "文件夹名";
-      if (nasCreateHint) nasCreateHint.textContent = "请填写文件夹名，不能包含扩展名（不要使用点号）。";
-      if (nasCreateInput) nasCreateInput.placeholder = "例如 文档";
+      if (nasCreateTitle) nasCreateTitle.textContent = t("新建文件夹");
+      if (nasCreateLabel) nasCreateLabel.textContent = t("文件夹名");
+      if (nasCreateHint) nasCreateHint.textContent = t("请填写文件夹名，不能包含扩展名（不要使用点号）。");
+      if (nasCreateInput) nasCreateInput.placeholder = t("例如 文档");
     } else {
-      if (nasCreateTitle) nasCreateTitle.textContent = "新建文件";
-      if (nasCreateLabel) nasCreateLabel.textContent = "文件名";
-      if (nasCreateHint) nasCreateHint.textContent = "请填写文件名，必须包含扩展名，例如 readme.txt";
-      if (nasCreateInput) nasCreateInput.placeholder = "例如 readme.txt";
+      if (nasCreateTitle) nasCreateTitle.textContent = t("新建文件");
+      if (nasCreateLabel) nasCreateLabel.textContent = t("文件名");
+      if (nasCreateHint) nasCreateHint.textContent = t("请填写文件名，必须包含扩展名，例如 readme.txt");
+      if (nasCreateInput) nasCreateInput.placeholder = t("例如 readme.txt");
     }
     if (nasCreateInput) nasCreateInput.value = "";
     openModal("nas-create");
@@ -3750,7 +4270,7 @@
     if (nasCreateCtl.busy) return;
     const session = selectedDrive();
     if (!session || !session.rpcSessionId) {
-      showNasCreateError("请先连接网盘");
+      showNasCreateError(t("请先连接网盘"));
       return;
     }
     const name = nasCreateInput ? nasCreateInput.value.trim() : "";
@@ -3772,13 +4292,13 @@
       if (nasCreateCtl.seq !== seq) return;
       nasCreateCtl.busy = false;
       if (nasCreateOk) nasCreateOk.disabled = false;
-      showNasCreateError("创建失败");
+      showNasCreateError(t("创建失败"));
     });
     window.setTimeout(function () {
       if (nasCreateCtl.seq !== seq || !nasCreateCtl.busy) return;
       nasCreateCtl.busy = false;
       if (nasCreateOk) nasCreateOk.disabled = false;
-      showNasCreateError("创建超时");
+      showNasCreateError(t("创建超时"));
     }, 12000);
   }
 
@@ -3796,9 +4316,9 @@
     if (!payload.ok) {
       if (modalNasCreate && !modalNasCreate.hidden) {
         const code = String(payload.error || "");
-        if (code === "exists") showNasCreateError("已存在同名文件或文件夹");
-        else if (code === "invalid") showNasCreateError("名称不合法");
-        else showNasCreateError("创建失败");
+        if (code === "exists") showNasCreateError(t("已存在同名文件或文件夹"));
+        else if (code === "invalid") showNasCreateError(t("名称不合法"));
+        else showNasCreateError(t("创建失败"));
       }
       return;
     }
@@ -3883,29 +4403,30 @@
   function formatNasDeleteDesc(items) {
     const list = items || [];
     if (list.length === 1) {
-      const kind = list[0].isDir ? "文件夹" : "文件";
-      const extra = list[0].isDir ? "文件夹会连同其中的内容一起删除。" : "";
-      return "确定删除" + kind + "「" + (list[0].name || "") + "」？" + extra + "删除后无法恢复。";
+      return list[0].isDir
+        ? t("确定删除文件夹「{name}」？文件夹会连同其中的内容一起删除。删除后无法恢复。", {
+            name: list[0].name || "",
+          })
+        : t("确定删除文件「{name}」？删除后无法恢复。", { name: list[0].name || "" });
     }
     const hasDir = list.some(function (item) {
       return item && item.isDir;
     });
     return (
-      "确定删除已选的 " +
-      list.length +
-      " 个项目？" +
-      (hasDir ? "其中的文件夹会连同内容一起删除。" : "") +
-      "删除后无法恢复。"
+      t("确定删除已选的 {n} 个项目？{extra}删除后无法恢复。", {
+        n: list.length,
+        extra: hasDir ? t("其中的文件夹会连同内容一起删除。") : "",
+      })
     );
   }
 
   function nasDeleteFailReason(key) {
     const text = String(key || "");
-    if (text === "missing") return "文件或文件夹不存在";
-    if (text === "invalid") return "不能删除该项";
-    if (text === "failed") return "删除失败，请稍后重试";
+    if (text === "missing") return t("文件或文件夹不存在");
+    if (text === "invalid") return t("不能删除该项");
+    if (text === "failed") return t("删除失败，请稍后重试");
     if (text.indexOf("不能") >= 0 || text.indexOf("不存在") >= 0) return text;
-    return "删除失败，请稍后重试";
+    return t("删除失败，请稍后重试");
   }
 
   function openNasDeleteFailPrompt(fails) {
@@ -3915,16 +4436,16 @@
     if (!list.length) return;
     state.confirmKind = "info";
     if (list.length === 1) {
-      confirmTitle.textContent = "无法删除";
+      confirmTitle.textContent = t("无法删除");
       confirmDesc.textContent =
         "「" + (list[0].name || "") + "」" + nasDeleteFailReason(list[0].error);
       setConfirmFailList([]);
     } else {
-      confirmTitle.textContent = "部分项目未能删除";
-      confirmDesc.textContent = "以下项目没有删除成功：";
+      confirmTitle.textContent = t("部分项目未能删除");
+      confirmDesc.textContent = t("以下项目没有删除成功：");
       setConfirmFailList(list, nasDeleteFailReason);
     }
-    confirmOkBtn.textContent = "知道了";
+    confirmOkBtn.textContent = t("知道了");
     confirmOkBtn.className = "btn-primary";
     if (confirmCancelBtn) confirmCancelBtn.hidden = true;
     openModal("confirm");
@@ -3941,10 +4462,10 @@
     nasDeleteCtl.path = normalizeNasPath(drive.nasPath || "/");
     state.confirmKind = "delete-nas";
     confirmTitle.textContent =
-      items.length > 1 ? "删除项目" : items[0].isDir ? "删除文件夹" : "删除文件";
+      items.length > 1 ? t("删除项目") : items[0].isDir ? t("删除文件夹") : t("删除文件");
     confirmDesc.textContent = formatNasDeleteDesc(items);
     setConfirmFailList([]);
-    confirmOkBtn.textContent = "删除";
+    confirmOkBtn.textContent = t("删除");
     confirmOkBtn.className = "btn-danger";
     if (confirmCancelBtn) confirmCancelBtn.hidden = false;
     openModal("confirm");
@@ -4091,9 +4612,9 @@
 
   function validateNasRenameName(raw) {
     const name = String(raw || "").trim();
-    if (!name) return "请填写名称";
-    if (/[\\/:*?"<>|\u0000]/.test(name)) return "名称不能包含特殊字符";
-    if (name === "." || name === ".." || name.charAt(0) === ".") return "名称不能以点开头";
+    if (!name) return t("请填写名称");
+    if (/[\\/:*?"<>|\u0000]/.test(name)) return t("名称不能包含特殊字符");
+    if (name === "." || name === ".." || name.charAt(0) === ".") return t("名称不能以点开头");
     return "";
   }
 
@@ -4370,13 +4891,13 @@
       nasSearchCtl.loading = false;
       nasSearchCtl.results = [];
       nasSearchCtl.truncated = false;
-      renderNasSearchDrop("搜索失败");
+      renderNasSearchDrop(t("搜索失败"));
     });
     window.setTimeout(function () {
       if (nasSearchCtl.seq !== seq || !nasSearchCtl.loading) return;
       nasSearchCtl.loading = false;
       nasSearchCtl.results = [];
-      renderNasSearchDrop("搜索超时");
+      renderNasSearchDrop(t("搜索超时"));
     }, 32000);
   }
 
@@ -4408,7 +4929,7 @@
     nasSearchCtl.highlight = nasSearchCtl.results.length ? 0 : -1;
     if (!payload.ok) {
       nasSearchCtl.results = [];
-      renderNasSearchDrop("搜索超时");
+      renderNasSearchDrop(t("搜索超时"));
       showNasSearchDrop();
       return;
     }
@@ -4438,12 +4959,12 @@
       return;
     }
     if (nasSearchCtl.loading) {
-      nasSearchDrop.innerHTML = '<div class="nas-search-empty">正在搜索…</div>';
+      nasSearchDrop.innerHTML = '<div class="nas-search-empty">' + t("正在搜索…") + "</div>";
       return;
     }
     const items = nasSearchCtl.results || [];
     if (!items.length) {
-      nasSearchDrop.innerHTML = '<div class="nas-search-empty">没有匹配的文件或文件夹</div>';
+      nasSearchDrop.innerHTML = '<div class="nas-search-empty">' + t("没有匹配的文件或文件夹") + "</div>";
       return;
     }
     const q = nasSearchCtl.keyword;
@@ -4467,7 +4988,7 @@
       })
       .join("");
     if (nasSearchCtl.truncated) {
-      html += '<div class="nas-search-more">仅显示部分结果，请再输入更完整的名称</div>';
+      html += '<div class="nas-search-more">' + t("仅显示部分结果，请再输入更完整的名称") + "</div>";
     }
     nasSearchDrop.innerHTML = html;
   }
@@ -4533,12 +5054,12 @@
 
   function nasZipFailReason(code) {
     const key = String(code || "");
-    if (key === "exists") return "已存在同名压缩文件，无法继续压缩";
-    if (key === "missing") return "文件夹不存在";
-    if (key === "invalid") return "不能压缩该项";
-    if (key === "failed") return "压缩失败，请稍后重试";
+    if (key === "exists") return t("已存在同名压缩文件，无法继续压缩");
+    if (key === "missing") return t("文件夹不存在");
+    if (key === "invalid") return t("不能压缩该项");
+    if (key === "failed") return t("压缩失败，请稍后重试");
     if (key.indexOf("已存在") >= 0 || key.indexOf("不能") >= 0) return key;
-    return "压缩失败，请稍后重试";
+    return t("压缩失败，请稍后重试");
   }
 
   function setNasZipProgress(pct) {
@@ -4549,8 +5070,8 @@
   }
 
   function showNasZipBusyUI(name) {
-    if (nasZipTitle) nasZipTitle.textContent = "正在压缩";
-    if (nasZipDesc) nasZipDesc.textContent = "正在压缩「" + name + "」，请稍候…";
+    if (nasZipTitle) nasZipTitle.textContent = t("正在压缩");
+    if (nasZipDesc) nasZipDesc.textContent = t("正在压缩「{name}」，请稍候…", { name: name });
     if (nasZipProgress) nasZipProgress.hidden = false;
     if (nasZipSpinner) nasZipSpinner.hidden = false;
     if (nasZipError) {
@@ -4572,7 +5093,7 @@
         openModal("nas-zip");
         return;
       }
-      openInfoPrompt("正在压缩", "当前已有压缩任务进行中，请等待完成后再试。");
+      openInfoPrompt(t("正在压缩"), t("当前已有压缩任务进行中，请等待完成后再试。"));
       return;
     }
     cancelNasRename();
@@ -4605,28 +5126,28 @@
     if (ok) {
       setNasZipProgress(100);
       if (nasZipSpinner) nasZipSpinner.hidden = true;
-      if (nasZipTitle) nasZipTitle.textContent = "压缩完成";
-      if (nasZipDesc) nasZipDesc.textContent = "已生成「" + zipName + "」。";
+      if (nasZipTitle) nasZipTitle.textContent = t("压缩完成");
+      if (nasZipDesc) nasZipDesc.textContent = t("已生成「{name}」。", { name: zipName });
       if (nasZipError) nasZipError.hidden = true;
       if (drive && normalizeNasPath(drive.nasPath || "/") === path) {
         nasZipCtl.selectName = zipName;
         requestNasPath(drive, drive.nasPath);
       }
       if (wasAsync || !modalNasZip || modalNasZip.hidden) {
-        openInfoPrompt("压缩完成", "已生成「" + zipName + "」。");
+        openInfoPrompt(t("压缩完成"), t("已生成「{name}」。", { name: zipName }));
         return;
       }
     } else {
       const reason = nasZipFailReason(error);
       if (nasZipSpinner) nasZipSpinner.hidden = true;
-      if (nasZipTitle) nasZipTitle.textContent = "无法压缩";
-      if (nasZipDesc) nasZipDesc.textContent = "「" + name + "」没有压缩成功。";
+      if (nasZipTitle) nasZipTitle.textContent = t("无法压缩");
+      if (nasZipDesc) nasZipDesc.textContent = t("「{name}」没有压缩成功。", { name: name });
       if (nasZipError) {
         nasZipError.hidden = false;
         nasZipError.textContent = reason;
       }
       if (wasAsync || !modalNasZip || modalNasZip.hidden) {
-        openInfoPrompt("无法压缩", "「" + name + "」" + reason);
+        openInfoPrompt(t("无法压缩"), t("「{name}」{reason}", { name: name, reason: reason }));
         return;
       }
     }
@@ -4722,7 +5243,7 @@
     window.setTimeout(function () {
       if (!session || session.nasListSeq !== seq || !session.nasLoading) return;
       session.nasLoading = false;
-      session.nasListError = "文件列表请求超时";
+      session.nasListError = t("文件列表请求超时");
       if (state.selectedId === session.id) renderNasExplorer(session);
     }, 12000);
   }
@@ -4790,7 +5311,7 @@
       if (match) {
         usedByPicker = true;
         nasMovePicker.loading = false;
-        nasMovePicker.listError = mappedOk ? "" : "目录列表请求超时";
+        nasMovePicker.listError = mappedOk ? "" : t("目录列表请求超时");
         nasMovePicker.folders = mappedOk
           ? mapped
               .filter(function (item) {
@@ -4808,7 +5329,7 @@
     if (!eventPath && usedByPicker && nasMovePicker.path !== drivePath) return;
     drive.nasLoading = false;
     if (!mappedOk) {
-      drive.nasListError = "文件列表请求超时";
+      drive.nasListError = t("文件列表请求超时");
     } else {
       drive.nasListError = "";
       drive.nasFiles = mapped;
@@ -4840,12 +5361,12 @@
       session.nasPreviewSeq = (session.nasPreviewSeq || 0) + 1;
       session.nasPreviewName = "";
       session.nasPreviewKind = "image";
-      showNasPreview(session, name, "", "图片过大请下载到本地查看", false);
+      showNasPreview(session, name, "", t("图片过大请下载到本地查看"), false);
       return;
     }
     beginNasPreview(session, name, "image");
     const seq = session.nasPreviewSeq;
-    showNasPreview(session, name, "", "正在加载预览…", true);
+    showNasPreview(session, name, "", t("正在加载预览…"), true);
     requestNasPreviewFile(session, file, seq, function (result) {
       if (!result || !result.cached || !result.localPath) return;
       openNasPreviewImage(session, name, result.localPath);
@@ -4854,7 +5375,7 @@
       if (!session || session.nasPreviewSeq !== seq) return;
       if (!nasPreview || nasPreview.hidden) return;
       if (nasPreviewImage && !nasPreviewImage.hidden && nasPreviewImage.getAttribute("src")) return;
-      showNasPreview(session, name, "", "预览超时", false);
+      showNasPreview(session, name, "", t("预览超时"), false);
     }, 90000);
   }
 
@@ -4876,15 +5397,15 @@
       session.nasPreviewSeq = (session.nasPreviewSeq || 0) + 1;
       session.nasPreviewName = "";
       session.nasPreviewKind = kind;
-      showNasPreview(session, name, "", "文件过大无法在线编辑", false);
+      showNasPreview(session, name, "", t("文件过大无法在线编辑"), false);
       return;
     }
     beginNasPreview(session, name, kind);
     const seq = session.nasPreviewSeq;
-    showNasPreview(session, name, "", "正在加载文件…", true);
+    showNasPreview(session, name, "", t("正在加载文件…"), true);
     requestNasPreviewFile(session, file, seq, function (result) {
       if (!result || !result.localPath) {
-        showNasPreview(session, name, "", "无法打开，请稍后重试", false);
+        showNasPreview(session, name, "", t("无法打开，请稍后重试"), false);
         return;
       }
       if (result.cached) {
@@ -4895,7 +5416,7 @@
       if (!session || session.nasPreviewSeq !== seq) return;
       if (!nasPreview || nasPreview.hidden) return;
       if (nasEditorEl && !nasEditorEl.hidden) return;
-      showNasPreview(session, name, "", "打开超时", false);
+      showNasPreview(session, name, "", t("打开超时"), false);
     }, 90000);
   }
 
@@ -4907,7 +5428,7 @@
       session.nasPreviewSeq = (session.nasPreviewSeq || 0) + 1;
       session.nasPreviewName = "";
       session.nasPreviewKind = officeKind;
-      showNasPreview(session, name, "", "文件过大无法在线编辑", false);
+      showNasPreview(session, name, "", t("文件过大无法在线编辑"), false);
       return;
     }
     if (!prepareNasOpen(officeKind)) return;
@@ -4925,7 +5446,7 @@
       pending: true,
     });
     focusOfficeDoc(doc, true);
-    showNasOfficePanelFor(doc, "正在下载文件…", true);
+    showNasOfficePanelFor(doc, t("正在下载文件…"), true);
     pumpOfficeDownload();
   }
 
@@ -4948,14 +5469,14 @@
   }
 
   function nasStreamFailText(kind) {
-    return kind === "audio" ? "无法预览该音频" : "无法预览该视频";
+    return kind === "audio" ? t("无法预览该音频") : t("无法预览该视频");
   }
 
   function previewNasStream(session, file, kind) {
     const name = file.name;
     const max = kind === "audio" ? NAS_AUDIO_MAX : NAS_VIDEO_MAX;
     const tooBig =
-      kind === "audio" ? "音频过大请下载到本地查看" : "视频过大请下载到本地查看";
+      kind === "audio" ? t("音频过大请下载到本地查看") : t("视频过大请下载到本地查看");
     if (file.size != null && isFinite(file.size) && file.size >= max) {
       session.nasPreviewSeq = (session.nasPreviewSeq || 0) + 1;
       session.nasPreviewName = "";
@@ -4965,10 +5486,10 @@
     }
     beginNasPreview(session, name, kind);
     const seq = session.nasPreviewSeq;
-    showNasPreview(session, name, "", "正在加载预览…", true);
+    showNasPreview(session, name, "", t("正在加载预览…"), true);
     requestNasPreviewFile(session, file, seq, function (result) {
       if (!result || !result.localPath) {
-        showNasPreview(session, name, "", "无法预览，请稍后重试", false);
+        showNasPreview(session, name, "", t("无法预览，请稍后重试"), false);
         return;
       }
       if (result.cached) {
@@ -4998,7 +5519,7 @@
       .then(function (result) {
         if (!session || session.nasPreviewSeq !== seq) return;
         if (result && result.busy) {
-          showNasPreview(session, file.name, "", "有文件正在传输，请稍候", false);
+          showNasPreview(session, file.name, "", t("有文件正在传输，请稍候"), false);
           return;
         }
         onResult(result || null);
@@ -5023,8 +5544,8 @@
       officeDoc.downloadStarted = false;
       if (!payload.ok || !payload.localPath) {
         officeDoc.pending = false;
-        setOfficeDocHint(officeDoc, "无法打开，请稍后重试");
-        showNasOfficePanelFor(officeDoc, "无法打开，请稍后重试", false);
+        setOfficeDocHint(officeDoc, t("无法打开，请稍后重试"));
+        showNasOfficePanelFor(officeDoc, t("无法打开，请稍后重试"), false);
         renderOfficeDock();
         pumpOfficeDownload();
         return;
@@ -5041,12 +5562,12 @@
       if (payload.ok && payload.localPath) {
         openNasPreviewStream(drive, payload.localPath, true);
       } else if (!nasStreamCtl.playing) {
-        showNasPreview(drive, name || drive.nasPreviewName, "", "无法预览，请稍后重试", false);
+        showNasPreview(drive, name || drive.nasPreviewName, "", t("无法预览，请稍后重试"), false);
       }
       return;
     }
     if (!payload.ok || !payload.localPath) {
-      showNasPreview(drive, name || drive.nasPreviewName, "", "无法打开，请稍后重试", false);
+      showNasPreview(drive, name || drive.nasPreviewName, "", t("无法打开，请稍后重试"), false);
       return;
     }
     if (isNasTextKind(drive.nasPreviewKind)) {
@@ -5070,7 +5591,7 @@
   function openNasPreviewImage(session, name, localPath) {
     const src = nasPreviewSrc(localPath);
     if (!src) {
-      showNasPreview(session, name, "", "无法预览，请稍后重试", false);
+      showNasPreview(session, name, "", t("无法预览，请稍后重试"), false);
       return;
     }
     showNasPreview(session, name, src, "", false, "image");
@@ -5080,12 +5601,12 @@
     const kind = (session && session.nasPreviewKind) || "video";
     const el = nasStreamEl(kind);
     if (!el) {
-      showNasPreview(session, session && session.nasPreviewName, "", "无法预览，请稍后重试", false);
+      showNasPreview(session, session && session.nasPreviewName, "", t("无法预览，请稍后重试"), false);
       return;
     }
     const src = nasPreviewSrc(localPath);
     if (!src) {
-      showNasPreview(session, session && session.nasPreviewName, "", "无法预览，请稍后重试", false);
+      showNasPreview(session, session && session.nasPreviewName, "", t("无法预览，请稍后重试"), false);
       return;
     }
     nasStreamCtl.path = localPath;
@@ -5150,7 +5671,7 @@
       if (!session || session.nasPreviewSeq !== seq) return;
       if (nasStreamCtl.playing) return;
       if (!nasPreview || nasPreview.hidden) return;
-      setNasPreviewLoading(true, "等待下载完成后再打开");
+      setNasPreviewLoading(true, t("等待下载完成后再打开"));
     }, NAS_VIDEO_HINT_MS);
   }
 
@@ -5412,7 +5933,7 @@
   }
 
   function setNasOfficeHint(text) {
-    if (nasOfficeHint) nasOfficeHint.textContent = text || "";
+    if (nasOfficeHint) nasOfficeHint.textContent = text ? t(text) : "";
   }
 
   function setNasOfficeBusy(busy) {
@@ -5434,13 +5955,13 @@
 
   function officeDocStatusText(doc) {
     if (!doc) return "";
-    if (doc.pending && !doc.localPath) return "下载中";
-    if (doc.saving || doc.queued) return "同步中";
-    if (doc.noApp) return "未安装办公软件";
-    if (officeDocDirty(doc)) return "有未同步";
-    if (doc.opened) return "已同步";
+    if (doc.pending && !doc.localPath) return t("下载中");
+    if (doc.saving || doc.queued) return t("同步中");
+    if (doc.noApp) return t("未安装办公软件");
+    if (officeDocDirty(doc)) return t("有未同步");
+    if (doc.opened) return t("已同步");
     if (doc.hint) return doc.hint;
-    return "打开中";
+    return t("打开中");
   }
 
   function renderOfficeDock() {
@@ -5466,12 +5987,12 @@
           '" data-id="' +
           doc.id +
           '"><div class="nas-office-chip-main"><span class="nas-office-chip-name">' +
-          escapeHtml(doc.name || "文稿") +
+          escapeHtml(doc.name || t("文稿")) +
           '</span><span class="nas-office-chip-status">' +
           escapeHtml(officeDocStatusText(doc)) +
           '</span></div><button type="button" class="nas-office-chip-close" data-id="' +
           doc.id +
-          '" aria-label="结束编辑">×</button></div>'
+          '" aria-label="' + t("结束编辑") + '">×</button></div>'
         );
       })
       .join("");
@@ -5482,24 +6003,24 @@
       renderOfficeDock();
       return;
     }
-    if (nasOfficeTitle) nasOfficeTitle.textContent = doc.name || "文稿";
+    if (nasOfficeTitle) nasOfficeTitle.textContent = doc.name || t("文稿");
     if (nasOfficePath) {
       const dir = doc.path === "/" ? "" : doc.path;
       nasOfficePath.textContent = dir + "/" + (doc.name || "");
     }
     setNasOfficeBusy(!!doc.saving);
     if (doc.pending && !doc.localPath) {
-      setNasOfficeLoading(true, doc.hint || "正在下载文件…");
+      setNasOfficeLoading(true, doc.hint || t("正在下载文件…"));
     } else if (doc.saving) {
-      setNasOfficeLoading(true, "正在同步到网盘…");
+      setNasOfficeLoading(true, t("正在同步到网盘…"));
     } else {
       setNasOfficeLoading(false, "");
-      setNasOfficeHint(doc.hint || (officeDocDirty(doc) ? "已保存到本地，正在等待自动同步" : "已同步"));
+      setNasOfficeHint(doc.hint || (officeDocDirty(doc) ? t("已保存到本地，正在等待自动同步") : t("已同步")));
       if (nasOfficeGuide) {
         nasOfficeGuide.hidden = false;
         nasOfficeGuide.textContent = doc.noApp
-          ? "未检测到 WPS、Office 或 LibreOffice，请先安装办公软件后再打开。"
-          : "已使用系统软件打开。请在办公软件中保存，保存后会自动同步到网盘。";
+          ? t("未检测到 WPS、Office 或 LibreOffice，请先安装办公软件后再打开。")
+          : t("已使用系统软件打开。请在办公软件中保存，保存后会自动同步到网盘。");
       }
     }
     renderOfficeDock();
@@ -5525,14 +6046,14 @@
     if (nasPreview) nasPreview.hidden = true;
     stopNasStreamPump();
     nasOfficeFocusId = doc.id;
-    if (nasOfficeTitle) nasOfficeTitle.textContent = doc.name || "文稿";
+    if (nasOfficeTitle) nasOfficeTitle.textContent = doc.name || t("文稿");
     if (nasOfficePath) {
       const dir = doc.path === "/" ? "" : doc.path;
       nasOfficePath.textContent = dir + "/" + (doc.name || "");
     }
     hideNasOfficeAsk();
     setNasOfficeBusy(!!doc.saving);
-    setNasOfficeLoading(!!loading, status || doc.hint || "正在加载文件…");
+    setNasOfficeLoading(!!loading, status || doc.hint || t("正在加载文件…"));
     if (!loading) setOfficeDocHint(doc, status || doc.hint);
     nasOfficeEl.hidden = false;
     renderOfficeDock();
@@ -5578,7 +6099,7 @@
     if (!doc) return;
     if (doc.saving) {
       focusOfficeDoc(doc, true);
-      setOfficeDocHint(doc, "正在同步，请稍候再关闭");
+      setOfficeDocHint(doc, t("正在同步，请稍候再关闭"));
       return;
     }
     if (doc.opened && officeDocDirty(doc)) {
@@ -5635,10 +6156,10 @@
         if (doc.saving || doc.noApp) return;
         if (officeDocDirty(doc)) {
           const stable = doc.changedAt && Date.now() - doc.changedAt >= NAS_OFFICE_STABLE_MS;
-          setOfficeDocHint(doc, stable ? "已保存到本地，正在自动同步" : "已保存到本地，等待写入完成");
+          setOfficeDocHint(doc, stable ? t("已保存到本地，正在自动同步") : t("已保存到本地，等待写入完成"));
           if (stable) queueOfficeSync(doc, false, false);
         } else if (!doc.queued) {
-          setOfficeDocHint(doc, "已同步");
+          setOfficeDocHint(doc, t("已同步"));
         }
         refreshOfficeOverlay(doc);
       })
@@ -5657,7 +6178,7 @@
     if (!doc || doc.downloadStarted || doc.localPath) return;
     const drive = findDriveByRpc(doc.sessionId);
     if (!drive) {
-      setOfficeDocHint(doc, "网盘未连接");
+      setOfficeDocHint(doc, t("网盘未连接"));
       refreshOfficeOverlay(doc);
       return;
     }
@@ -5666,8 +6187,8 @@
     doc.openTimer = window.setTimeout(function () {
       if (!findOfficeDocById(doc.id) || doc.opened || doc.localPath) return;
       doc.downloadStarted = false;
-      setOfficeDocHint(doc, "打开超时");
-      showNasOfficePanelFor(doc, "打开超时", false);
+      setOfficeDocHint(doc, t("打开超时"));
+      showNasOfficePanelFor(doc, t("打开超时"), false);
       renderOfficeDock();
     }, 90000);
     tauriInvoke("nas_get_file", {
@@ -5680,7 +6201,7 @@
         if (!findOfficeDocById(doc.id)) return;
         if (result && result.busy) {
           doc.downloadStarted = false;
-          setOfficeDocHint(doc, "有文件正在传输，请稍候");
+          setOfficeDocHint(doc, t("有文件正在传输，请稍候"));
           refreshOfficeOverlay(doc);
           return;
         }
@@ -5692,7 +6213,7 @@
         if (!findOfficeDocById(doc.id)) return;
         doc.downloadStarted = false;
         doc.pending = false;
-        setOfficeDocHint(doc, "无法打开，请稍后重试");
+        setOfficeDocHint(doc, t("无法打开，请稍后重试"));
         refreshOfficeOverlay(doc);
       });
   }
@@ -5709,12 +6230,12 @@
       openNasOfficeFromPath(doc, doc.localPath);
       return;
     }
-    showNasOfficePanelFor(doc, doc.hint || "正在下载文件…", !!doc.pending);
+    showNasOfficePanelFor(doc, doc.hint || t("正在下载文件…"), !!doc.pending);
   }
 
   function openNasOfficeFromPath(doc, localPath) {
     if (!doc || !localPath) {
-      setNasOfficeLoading(false, "无法打开，请稍后重试");
+      setNasOfficeLoading(false, t("无法打开，请稍后重试"));
       return;
     }
     clearOfficeDocTimer(doc, "openTimer");
@@ -5722,7 +6243,7 @@
     doc.pending = false;
     doc.downloadStarted = false;
     if (focusedOfficeDoc() === doc) {
-      showNasOfficePanelFor(doc, "正在打开文件…", true);
+      showNasOfficePanelFor(doc, t("正在打开文件…"), true);
     }
     tauriInvoke("file_stat", { path: localPath })
       .then(function (stat) {
@@ -5733,7 +6254,7 @@
         if (!findOfficeDocById(doc.id)) return;
         doc.opened = true;
         doc.noApp = false;
-        setOfficeDocHint(doc, "已同步");
+        setOfficeDocHint(doc, t("已同步"));
         ensureOfficeWatch();
         refreshOfficeOverlay(doc);
         pumpOfficeDownload();
@@ -5743,11 +6264,11 @@
         doc.opened = false;
         if (msg.indexOf("no-office-app") >= 0) {
           doc.noApp = true;
-          setOfficeDocHint(doc, "请安装办公软件");
+          setOfficeDocHint(doc, t("请安装办公软件"));
           refreshOfficeOverlay(doc);
           return;
         }
-        setOfficeDocHint(doc, "无法打开，请稍后重试");
+        setOfficeDocHint(doc, t("无法打开，请稍后重试"));
         refreshOfficeOverlay(doc);
       });
   }
@@ -5756,17 +6277,17 @@
     if (!doc) return;
     hideNasOfficeAsk();
     if (doc.noApp) {
-      setOfficeDocHint(doc, "请安装办公软件");
+      setOfficeDocHint(doc, t("请安装办公软件"));
       if (thenClose) removeOfficeDoc(doc);
       return;
     }
     if (!doc.opened) {
-      setOfficeDocHint(doc, "文件还在加载");
+      setOfficeDocHint(doc, t("文件还在加载"));
       refreshOfficeOverlay(doc);
       return;
     }
     if (!officeDocDirty(doc)) {
-      setOfficeDocHint(doc, "没有修改");
+      setOfficeDocHint(doc, t("没有修改"));
       if (thenClose) removeOfficeDoc(doc);
       else refreshOfficeOverlay(doc);
       return;
@@ -5795,7 +6316,7 @@
     if (!doc || doc.saving) return;
     if (!doc.sessionId || !doc.localPath || !doc.name) {
       doc.queued = false;
-      setOfficeDocHint(doc, "同步失败");
+      setOfficeDocHint(doc, t("同步失败"));
       refreshOfficeOverlay(doc);
       return;
     }
@@ -5808,11 +6329,11 @@
       if (!findOfficeDocById(doc.id) || !doc.saving) return;
       doc.saving = false;
       doc.queued = true;
-      setOfficeDocHint(doc, "同步超时，将重试");
+      setOfficeDocHint(doc, t("同步超时，将重试"));
       refreshOfficeOverlay(doc);
       pumpOfficeSync();
     }, 120000);
-    setOfficeDocHint(doc, "正在同步到网盘…");
+    setOfficeDocHint(doc, t("正在同步到网盘…"));
     refreshOfficeOverlay(doc);
     tauriInvoke("office_snapshot_file", { path: doc.localPath })
       .then(function (snapPath) {
@@ -5829,7 +6350,7 @@
         clearOfficeDocTimer(doc, "saveTimer");
         doc.saving = false;
         doc.queued = true;
-        setOfficeDocHint(doc, "文件正在写入，稍后自动同步");
+        setOfficeDocHint(doc, t("文件正在写入，稍后自动同步"));
         refreshOfficeOverlay(doc);
         window.setTimeout(pumpOfficeSync, 4000);
       });
@@ -5847,7 +6368,7 @@
     doc.saving = false;
     if (!payload.ok) {
       doc.queued = true;
-      setOfficeDocHint(doc, "网盘忙，稍后自动同步");
+      setOfficeDocHint(doc, t("网盘忙，稍后自动同步"));
       refreshOfficeOverlay(doc);
       window.setTimeout(pumpOfficeSync, 2500);
       return true;
@@ -5864,7 +6385,7 @@
         queueOfficeSync(doc, doc.closeAfterSave, false);
         return;
       }
-      setOfficeDocHint(doc, "已同步");
+      setOfficeDocHint(doc, t("已同步"));
       if (doc.closeAfterSave) {
         doc.closeAfterSave = false;
         removeOfficeDoc(doc);
@@ -5977,7 +6498,7 @@
 
   function openNasTextFromPath(session, localPath) {
     if (!session || !localPath) {
-      showNasPreview(session, session && session.nasPreviewName, "", "无法打开，请稍后重试", false);
+      showNasPreview(session, session && session.nasPreviewName, "", t("无法打开，请稍后重试"), false);
       return;
     }
     tauriInvoke("nas_read_text", { path: localPath })
@@ -5987,14 +6508,14 @@
       .catch(function (err) {
         const msg = String((err && err.message) || err || "");
         if (msg.indexOf("too-large") >= 0) {
-          showNasPreview(session, session.nasPreviewName, "", "文件过大无法在线编辑", false);
+          showNasPreview(session, session.nasPreviewName, "", t("文件过大无法在线编辑"), false);
           return;
         }
         if (msg.indexOf("not-text") >= 0) {
-          showNasPreview(session, session.nasPreviewName, "", "该文件不是可编辑的文本", false);
+          showNasPreview(session, session.nasPreviewName, "", t("该文件不是可编辑的文本"), false);
           return;
         }
-        showNasPreview(session, session.nasPreviewName, "", "无法打开，请稍后重试", false);
+        showNasPreview(session, session.nasPreviewName, "", t("无法打开，请稍后重试"), false);
       });
   }
 
@@ -6010,7 +6531,7 @@
     nasEditorCtl.saving = false;
     nasEditorCtl.closeAfterSave = false;
     nasEditorCtl.saveText = "";
-    if (nasEditorTitle) nasEditorTitle.textContent = nasEditorCtl.name || "文本";
+    if (nasEditorTitle) nasEditorTitle.textContent = nasEditorCtl.name || t("文本");
     if (nasEditorPath) {
       const dir = nasEditorCtl.path === "/" ? "" : nasEditorCtl.path;
       nasEditorPath.textContent = dir + "/" + (nasEditorCtl.name || "");
@@ -6028,16 +6549,16 @@
     if (!nasEditorEl || nasEditorEl.hidden || nasEditorCtl.saving) return;
     hideNasEditorAsk();
     if (!nasEditorDirty()) {
-      setNasEditorHint("没有修改");
+      setNasEditorHint(t("没有修改"));
       if (thenClose) forceCloseNasEditor();
       return;
     }
     if (!nasEditorCtl.sessionId || !nasEditorCtl.localPath || !nasEditorCtl.name) {
-      setNasEditorHint("保存失败");
+      setNasEditorHint(t("保存失败"));
       return;
     }
     if (driveHasRunningTask(findDriveByRpc(nasEditorCtl.sessionId))) {
-      setNasEditorHint("有传输任务进行中，请稍候再保存");
+      setNasEditorHint(t("有传输任务进行中，请稍候再保存"));
       return;
     }
     const text = nasEditorBody ? nasEditorBody.value : "";
@@ -6045,14 +6566,14 @@
     nasEditorCtl.closeAfterSave = !!thenClose;
     nasEditorCtl.saveText = text;
     setNasEditorBusy(true);
-    setNasEditorHint("正在保存…");
+    setNasEditorHint(t("正在保存…"));
     clearNasEditorSaveTimer();
     nasEditorCtl.saveTimer = window.setTimeout(function () {
       if (!nasEditorCtl.saving) return;
       nasEditorCtl.saving = false;
       nasEditorCtl.closeAfterSave = false;
       setNasEditorBusy(false);
-      setNasEditorHint("保存超时");
+      setNasEditorHint(t("保存超时"));
     }, 120000);
     tauriInvoke("nas_write_text", { path: nasEditorCtl.localPath, text: text })
       .then(function () {
@@ -6068,7 +6589,7 @@
         nasEditorCtl.saving = false;
         nasEditorCtl.closeAfterSave = false;
         setNasEditorBusy(false);
-        setNasEditorHint("保存失败");
+        setNasEditorHint(t("保存失败"));
       });
   }
 
@@ -6085,12 +6606,12 @@
     setNasEditorBusy(false);
     if (!payload.ok) {
       nasEditorCtl.closeAfterSave = false;
-      setNasEditorHint("保存失败");
+      setNasEditorHint(t("保存失败"));
       return;
     }
     nasEditorCtl.original = nasEditorCtl.saveText;
     const stillDirty = nasEditorDirty();
-    setNasEditorHint(stillDirty ? "已保存，还有未提交的修改" : "已保存");
+    setNasEditorHint(stillDirty ? t("已保存，还有未提交的修改") : t("已保存"));
     const drive = state.drives.find(function (item) {
       return item.rpcSessionId === sid;
     });
@@ -6105,16 +6626,16 @@
   }
 
   function nasKindMeta(kind) {
-    if (kind === "folder") return { label: "文件夹", cls: "is-folder" };
-    if (kind === "image") return { label: "图像", cls: "is-image" };
-    if (kind === "video") return { label: "影片", cls: "is-video" };
-    if (kind === "audio") return { label: "音频", cls: "is-audio" };
-    if (kind === "pdf") return { label: "PDF 文稿", cls: "is-pdf" };
-    if (kind === "archive") return { label: "压缩包", cls: "is-archive" };
-    if (kind === "doc") return { label: "文稿", cls: "is-doc" };
-    if (kind === "text") return { label: "文本", cls: "is-text" };
-    if (kind === "code") return { label: "代码", cls: "is-code" };
-    return { label: "文稿", cls: "is-file" };
+    if (kind === "folder") return { label: t("文件夹"), cls: "is-folder" };
+    if (kind === "image") return { label: t("图像"), cls: "is-image" };
+    if (kind === "video") return { label: t("影片"), cls: "is-video" };
+    if (kind === "audio") return { label: t("音频"), cls: "is-audio" };
+    if (kind === "pdf") return { label: t("PDF 文稿"), cls: "is-pdf" };
+    if (kind === "archive") return { label: t("压缩包"), cls: "is-archive" };
+    if (kind === "doc") return { label: t("文稿"), cls: "is-doc" };
+    if (kind === "text") return { label: t("文本"), cls: "is-text" };
+    if (kind === "code") return { label: t("代码"), cls: "is-code" };
+    return { label: t("文稿"), cls: "is-file" };
   }
 
   function renderNasFiles(session) {
@@ -6123,8 +6644,8 @@
       nasFileBody.innerHTML =
         '<div class="nas-empty">' +
         '<div class="nas-empty-icon" aria-hidden="true"></div>' +
-        "<h3>正在加载</h3>" +
-        "<p>正在获取当前目录的文件列表…</p>" +
+        "<h3>" + t("正在加载") + "</h3>" +
+        "<p>" + t("正在获取当前目录的文件列表…") + "</p>" +
         "</div>";
       return;
     }
@@ -6132,9 +6653,9 @@
       nasFileBody.innerHTML =
         '<div class="nas-empty">' +
         '<div class="nas-empty-icon" aria-hidden="true"></div>' +
-        "<h3>无法加载</h3>" +
+        "<h3>" + t("无法加载") + "</h3>" +
         "<p>" +
-        escapeHtml(session.nasListError) +
+        escapeHtml(t(session.nasListError)) +
         "</p>" +
         "</div>";
       return;
@@ -6144,8 +6665,8 @@
       nasFileBody.innerHTML =
         '<div class="nas-empty">' +
         '<div class="nas-empty-icon" aria-hidden="true"></div>' +
-        "<h3>此文件夹为空</h3>" +
-        "<p>当前目录没有可见的文件或文件夹。</p>" +
+        "<h3>" + t("此文件夹为空") + "</h3>" +
+        "<p>" + t("当前目录没有可见的文件或文件夹。") + "</p>" +
         "</div>";
       pruneNasSelection(session);
       applyPendingNasSearchSelect(session);
@@ -6268,7 +6789,7 @@
 
   function renderNasExplorer(session) {
     if (!session) return;
-    if (nasTitle) nasTitle.textContent = session.remark || "网盘连接";
+    if (nasTitle) nasTitle.textContent = session.remark || t("网盘连接");
     renderNasCrumbs(session.nasPath || "/");
     applyNasView();
     const info = session.nasInfo;
@@ -6281,7 +6802,7 @@
       if (nasMeterBar && nasMeterBar.parentElement) {
         nasMeterBar.parentElement.classList.remove("is-warn", "is-full");
       }
-      if (nasStatsHint) nasStatsHint.textContent = "正在获取网盘信息…";
+      if (nasStatsHint) nasStatsHint.textContent = t("正在获取网盘信息…");
     } else {
       const total = info.diskSize || 0;
       const free = info.banlenSize || 0;
@@ -6297,7 +6818,7 @@
         nasMeterBar.parentElement.classList.toggle("is-full", pct >= 95);
       }
       if (nasStatsHint) {
-        nasStatsHint.textContent = "更新于 " + formatClock(info.updatedAt);
+        nasStatsHint.textContent = t("更新于 {time}", { time: formatClock(info.updatedAt) });
       }
     }
     renderNasFiles(session);
@@ -6307,6 +6828,12 @@
 
   function bindWorkspaceEvents() {
     document.getElementById("btn-logout").addEventListener("click", logout);
+    if (btnManageToken) {
+      btnManageToken.addEventListener("click", openPortalConsole);
+    }
+    if (infoAccountRemark) {
+      infoAccountRemark.addEventListener("click", openAccountRemark);
+    }
     document.getElementById("btn-new-session").addEventListener("click", function () {
       openModal("new");
     });
@@ -6323,7 +6850,7 @@
     document.getElementById("btn-voice").addEventListener("click", startVoiceCall);
     document.getElementById("btn-desktop").addEventListener("click", function () {
       const btn = document.getElementById("btn-desktop");
-      if (btn && btn.textContent === "结束控制") {
+      if (state.desktopPhase && state.desktopPhase !== "idle") {
         tauriInvoke("desktop_hangup").catch(showDesktopError);
         return;
       }
@@ -6560,11 +7087,12 @@
     if (!id) return;
     const session = findItem(id);
     if (action === "remark") {
+      state.remarkKind = "session";
       state.remarkSessionId = id;
       remarkInput.value = session ? session.remark : "";
       const remarkTitle = document.getElementById("remark-title");
-      if (remarkTitle) remarkTitle.textContent = isDrive(session) ? "设置网盘备注" : "设置会话备注";
-      remarkInput.placeholder = isDrive(session) ? "例如：家里 NAS" : "例如：小明";
+      if (remarkTitle) remarkTitle.textContent = isDrive(session) ? t("设置网盘备注") : t("设置会话备注");
+      remarkInput.placeholder = isDrive(session) ? t("例如：家里 NAS") : t("例如：小明");
       openModal("remark");
     } else if (action === "close") {
       closeSession(id);
@@ -6580,10 +7108,11 @@
     if (!state.user) return;
     infoToken.textContent = state.user.token;
     infoToken.title = state.user.token;
-    infoPassphrase.textContent = state.user.passphrase ? state.user.passphrase : "未设置";
+    infoPassphrase.textContent = state.user.passphrase ? state.user.passphrase : t("未设置");
     infoPassphrase.title = infoPassphrase.textContent;
-    infoLoginTime.textContent = formatDateTime(state.user.loginAt);
+    renderAccountRemark();
     infoSessionCount.textContent = String(state.sdkSessionCount);
+    updatePortalManageButton();
   }
 
   function renderWorkspace() {
@@ -6595,9 +7124,9 @@
 
   function renderSessionList() {
     renderPeerList(sessionListEl, state.sessions, {
-      empty: '暂无聊天会话<br />点击「新建会话」连接对端',
-      closeLabel: "关闭会话",
-      deleteLabel: "删除会话",
+      empty: t("暂无聊天会话<br />点击「新建会话」连接对端"),
+      closeLabel: t("关闭会话"),
+      deleteLabel: t("删除会话"),
       showClear: true,
       glyph: "chat",
     });
@@ -6606,9 +7135,9 @@
   function renderDriveList() {
     if (!driveListEl) return;
     renderPeerList(driveListEl, state.drives, {
-      empty: '暂无连接<br />点击「新建连接」连接家里的 NAS',
-      closeLabel: "关闭连接",
-      deleteLabel: "删除连接",
+      empty: t("暂无连接<br />点击「新建连接」连接家里的 NAS"),
+      closeLabel: t("关闭连接"),
+      deleteLabel: t("删除连接"),
       showClear: false,
       glyph: "drive",
     });
@@ -6623,7 +7152,7 @@
     el.innerHTML = items
       .map(function (session) {
         const title = session.remark || session.peerToken;
-        const sub = session.remark ? session.peerToken : "未备注";
+        const sub = session.remark ? session.peerToken : t("未备注");
         const active = session.id === state.selectedId ? " is-active" : "";
         const on = session.connected ? " is-on" : "";
         const online = session.connected ? " is-online" : "";
@@ -6632,11 +7161,11 @@
           ? '<button type="button" data-action="close">' + opts.closeLabel + "</button>"
           : "";
         const clearBtn = opts.showClear
-          ? '<button type="button" data-action="clear">清空内容</button>'
+          ? '<button type="button" data-action="clear">' + t("清空内容") + "</button>"
           : "";
         const menu = menuOpen
           ? '<div class="session-dropdown">' +
-            '<button type="button" data-action="remark">设置备注</button>' +
+            '<button type="button" data-action="remark">' + t("设置备注") + "</button>" +
             closeBtn +
             clearBtn +
             '<button type="button" class="is-danger" data-action="delete">' +
@@ -6670,7 +7199,7 @@
           escapeHtml(sub) +
           "</span>" +
           "</div>" +
-          '<button class="session-gear" type="button" aria-label="设置">⚙</button>' +
+          '<button class="session-gear" type="button" aria-label="' + t("设置") + '">⚙</button>' +
           "</div>" +
           menu +
           "</div>"
@@ -6706,31 +7235,31 @@
         connectMark.classList.toggle("is-chat", !isDrive(session));
       }
       if (connectTitle) {
-        connectTitle.textContent = isDrive(session) ? "请先连接网盘" : "请先建立 P2P 连接";
+        connectTitle.textContent = isDrive(session) ? t("请先连接网盘") : t("请先建立 P2P 连接");
       }
       if (connectDesc) {
         connectDesc.textContent = isDrive(session)
-          ? "当前尚未与 NAS / 网盘设备连通。连接成功后即可查阅和更新家里的文件。"
-          : "当前会话尚未与对端连通，连接成功后即可收发消息和文件。";
+          ? t("当前尚未与 NAS / 网盘设备连通。连接成功后即可查阅和更新家里的文件。")
+          : t("当前会话尚未与对端连通，连接成功后即可收发消息和文件。");
       }
       const name = session.remark || session.peerToken;
-      connectPeer.textContent = (isDrive(session) ? "网盘 Token：" : "对方 Token：") + session.peerToken;
+      connectPeer.textContent = (isDrive(session) ? t("网盘 Token：") : t("对方 Token：")) + session.peerToken;
       if (state.connectFillId !== session.id) {
         state.connectFillId = session.id;
         connectPeerPass.type = "password";
         connectPeerPass.value = session.peerPass || "";
         const toggle = document.getElementById("toggle-connect-pass");
         if (toggle) {
-          toggle.textContent = "显示";
-          toggle.setAttribute("aria-label", "显示认证口令");
+          toggle.textContent = t("显示");
+          toggle.setAttribute("aria-label", t("显示认证口令"));
         }
       }
       connectPeerPass.disabled = !!session.connecting;
       connectBtn.disabled = !!session.connecting;
-      connectBtn.textContent = session.connecting ? "连接中..." : "连接";
+      connectBtn.textContent = session.connecting ? t("连接中...") : t("连接");
       if (session.connectError) {
         connectError.hidden = false;
-        connectError.textContent = session.connectError;
+        connectError.textContent = t(session.connectError);
       } else {
         connectError.hidden = true;
       }
@@ -6747,9 +7276,9 @@
 
     showPanel("chat");
     chatTitle.textContent = session.remark || session.peerToken;
-    chatSubtitle.textContent = session.remark ? session.peerToken : "未备注";
+    chatSubtitle.textContent = session.remark ? session.peerToken : t("未备注");
     chatStatusDot.classList.add("is-on");
-    chatConnLabel.textContent = "已连接";
+    chatConnLabel.textContent = t("已连接");
     chatConnLabel.classList.add("is-on");
     composerInput.disabled = false;
     document.getElementById("btn-file").disabled = false;
@@ -6759,7 +7288,7 @@
     const btnDesktop = document.getElementById("btn-desktop");
     if (btnDesktop) btnDesktop.disabled = false;
     document.getElementById("btn-send").disabled = false;
-    composerInput.placeholder = "输入消息，Enter 发送，Shift+Enter 换行";
+    composerInput.placeholder = t("输入消息，Enter 发送，Shift+Enter 换行");
     if (!session.chatsLoaded) {
       chatLog.innerHTML = "";
       loadSessionChats(session).then(function () {
@@ -6808,10 +7337,10 @@
     return (
       '<button type="button" class="msg-copy" data-copy-msg="' +
       escapeHtml(msg.id) +
-      '" aria-label="复制全文">复制</button>' +
+      '" aria-label="' + t("复制全文") + '">' + t("复制") + "</button>" +
       '<button type="button" class="msg-resend" data-resend-msg="' +
       escapeHtml(msg.id) +
-      '" aria-label="重新发送">重发</button>' +
+      '" aria-label="' + t("重新发送") + '">' + t("重发") + "</button>" +
       '<div class="msg-text">' +
       escapeHtml(msg.content) +
       "</div>"
@@ -6895,7 +7424,7 @@
     confirmTitle.textContent = title;
     confirmDesc.textContent = desc;
     setConfirmFailList([]);
-    confirmOkBtn.textContent = "知道了";
+    confirmOkBtn.textContent = t("知道了");
     confirmOkBtn.className = "btn-primary";
     if (confirmCancelBtn) confirmCancelBtn.hidden = true;
     openModal("confirm");
@@ -6904,14 +7433,14 @@
   function openBusyDeletePrompt(msg) {
     state.confirmKind = "busy-message";
     state.deleteMessageId = msg.id;
-    confirmTitle.textContent = "无法删除";
+    confirmTitle.textContent = t("无法删除");
     confirmDesc.textContent =
       msg.type === "text"
-        ? "消息正在发送中，请稍后再删除。"
+        ? t("消息正在发送中，请稍后再删除。")
         : msg.from === "me"
-          ? "文件正在发送中，请等待发送完成后再删除这条记录。"
-          : "文件正在接收中，请等待接收完成后再删除这条记录。";
-    confirmOkBtn.textContent = "知道了";
+          ? t("文件正在发送中，请等待发送完成后再删除这条记录。")
+          : t("文件正在接收中，请等待接收完成后再删除这条记录。");
+    confirmOkBtn.textContent = t("知道了");
     confirmOkBtn.className = "btn-primary";
     if (confirmCancelBtn) confirmCancelBtn.hidden = true;
     openModal("confirm");
@@ -6920,17 +7449,17 @@
   function openDeleteMessageConfirm(msg) {
     state.confirmKind = "delete-message";
     state.deleteMessageId = msg.id;
-    confirmTitle.textContent = "删除这条消息";
+    confirmTitle.textContent = t("删除这条消息");
     if (msg.type === "text") {
-      confirmDesc.textContent = "确定删除这条消息吗？删除后无法从会话中恢复。";
+      confirmDesc.textContent = t("确定删除这条消息吗？删除后无法从会话中恢复。");
     } else if (msg.from === "me") {
       confirmDesc.textContent =
-        "确定删除这条发送记录吗？只会从会话中移除这条气泡，不会删除你电脑上的原始文件。";
+        t("确定删除这条发送记录吗？只会从会话中移除这条气泡，不会删除你电脑上的原始文件。");
     } else {
       confirmDesc.textContent =
-        "确定删除这条接收记录吗？会话中的气泡和本地缓存文件都会被删除，删除后无法恢复。";
+        t("确定删除这条接收记录吗？会话中的气泡和本地缓存文件都会被删除，删除后无法恢复。");
     }
-    confirmOkBtn.textContent = "删除";
+    confirmOkBtn.textContent = t("删除");
     confirmOkBtn.className = "btn-danger";
     if (confirmCancelBtn) confirmCancelBtn.hidden = false;
     openModal("confirm");
@@ -7007,11 +7536,11 @@
     });
     if (!msg) return;
     copyText(msg.content || "").then(function () {
-      btn.textContent = "已复制";
+      btn.textContent = t("已复制");
       btn.classList.add("is-done");
       window.setTimeout(function () {
         if (!btn.isConnected) return;
-        btn.textContent = "复制";
+        btn.textContent = t("复制");
         btn.classList.remove("is-done");
       }, 1200);
     }).catch(function () {});
@@ -7052,7 +7581,7 @@
     const folderBtn =
       '<button type="button" class="msg-folder" data-folder-msg="' +
       escapeHtml(msg.id) +
-      '" aria-label="打开所在目录">' +
+      '" aria-label="' + t("打开所在目录") + '">' +
       '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"></path></svg>' +
       "</button>";
     let visual;
@@ -7062,7 +7591,7 @@
         escapeHtml(msg.id) +
         '"' +
         (openable ? "" : " disabled") +
-        ' aria-label="查看图片">' +
+        ' aria-label="' + t("查看图片") + '">' +
         '<img alt="" src="' +
         escapeHtml(previewSrc) +
         '" />' +
@@ -7082,7 +7611,7 @@
     }
     const busy = msg.status === "sending" || msg.status === "receiving";
     const percent = msg.size ? Math.min(100, Math.round((msg.transferred / msg.size) * 100)) : 0;
-    const movedLabel = msg.from === "me" ? "已发送" : "已接收";
+    const movedLabel = msg.from === "me" ? t("已发送") : t("已接收");
     const xfer =
       '<div class="file-xfer">' +
       movedLabel +
@@ -7090,10 +7619,9 @@
       formatSize(msg.transferred) +
       " / " +
       formatSize(msg.size) +
-      "<br />耗时 " +
+      "<br />" + t("耗时") + " " +
       formatDuration(msg.elapsedMs) +
-      " · 平均 " +
-      formatSpeed(msg.speedBps) +
+      t(" · 平均 {speed}", { speed: formatSpeed(msg.speedBps) }) +
       "</div>";
     const bar = busy
       ? '<div class="xfer-bar"><span style="width:' + percent + '%"></span></div>'
@@ -7106,7 +7634,7 @@
       folderBtn +
       '<button type="button" class="msg-resend" data-resend-msg="' +
       escapeHtml(msg.id) +
-      '" aria-label="重新发送">重发</button>' +
+      '" aria-label="' + escapeHtml(t("重新发送")) + '">' + t("重发") + "</button>" +
       '<div class="' +
       cardClass +
       '">' +
@@ -7136,42 +7664,25 @@
   }
 
   function statusLabel(msg) {
+    function span(cls, key) {
+      return '<span class="msg-status ' + cls + '">' + t(key) + "</span>";
+    }
     if (msg.type !== "text") {
       if (msg.from === "me") {
-        if (msg.status === "sent") {
-          return '<span class="msg-status is-sent">发送成功</span>';
-        }
-        if (msg.status === "failed") {
-          return '<span class="msg-status is-failed">发送失败</span>';
-        }
-        if (msg.status === "sending") {
-          return '<span class="msg-status is-busy">发送中</span>';
-        }
+        if (msg.status === "sent") return span("is-sent", "发送成功");
+        if (msg.status === "failed") return span("is-failed", "发送失败");
+        if (msg.status === "sending") return span("is-busy", "发送中");
       } else {
-        if (msg.status === "received") {
-          return '<span class="msg-status is-sent">接收成功</span>';
-        }
-        if (msg.status === "receiving") {
-          return '<span class="msg-status is-busy">接收中</span>';
-        }
-        if (msg.status === "failed") {
-          return '<span class="msg-status is-failed">接收失败</span>';
-        }
+        if (msg.status === "received") return span("is-sent", "接收成功");
+        if (msg.status === "receiving") return span("is-busy", "接收中");
+        if (msg.status === "failed") return span("is-failed", "接收失败");
       }
       return "";
     }
-    if (msg.status === "sent" || msg.status === "received") {
-      return '<span class="msg-status is-sent">已发送</span>';
-    }
-    if (msg.status === "failed") {
-      return '<span class="msg-status is-failed">发送失败</span>';
-    }
-    if (msg.status === "sending") {
-      return '<span class="msg-status is-busy">发送中</span>';
-    }
-    if (msg.status === "receiving") {
-      return '<span class="msg-status is-busy">接收中</span>';
-    }
+    if (msg.status === "sent" || msg.status === "received") return span("is-sent", "已发送");
+    if (msg.status === "failed") return span("is-failed", "发送失败");
+    if (msg.status === "sending") return span("is-busy", "发送中");
+    if (msg.status === "receiving") return span("is-busy", "接收中");
     return "";
   }
 
@@ -7199,8 +7710,8 @@
 
     const localId = session.id;
     const failText = isDrive(session)
-      ? "连接失败。请确认网盘 Token 是否在线，以及当前网络是否可达。"
-      : "连接失败。请确认对方 Token 是否在线，以及当前网络是否可达。";
+      ? t("连接失败。请确认网盘 Token 是否在线，以及当前网络是否可达。")
+      : t("连接失败。请确认对方 Token 是否在线，以及当前网络是否可达。");
     tauriInvoke("webrpc_open_session", {
       peerToken: session.peerToken,
       passphrase: session.peerPass || "",
@@ -7241,7 +7752,7 @@
         current.rpcSessionId = 0;
         current.connectError =
           invokeErrorText(err).indexOf("handshake-send-failed") >= 0
-            ? "会话通信异常，通知消息未能送达，连接已关闭。请检查网络后重试。"
+            ? t("会话通信异常，通知消息未能送达，连接已关闭。请检查网络后重试。")
             : failText;
         renderWorkspace();
       });
@@ -7297,25 +7808,25 @@
     if (confirmCancelBtn) confirmCancelBtn.hidden = false;
     if (kind === "clear") {
       state.clearSessionId = sessionId;
-      confirmTitle.textContent = "清空内容";
+      confirmTitle.textContent = t("清空内容");
       confirmDesc.textContent =
-        "将清空本会话在本地的聊天记录（含文本和文件预览）。不会断开连接，也不会删除会话、备注或 Token。";
-      confirmOkBtn.textContent = "清空";
+        t("将清空本会话在本地的聊天记录（含文本和文件预览）。不会断开连接，也不会删除会话、备注或 Token。");
+      confirmOkBtn.textContent = t("清空");
     } else if (kind === "clear-nas-tasks") {
-      confirmTitle.textContent = "清除任务记录";
+      confirmTitle.textContent = t("清除任务记录");
       confirmDesc.textContent =
-        "将清除已完成、失败和已中断的任务记录。进行中和排队中的任务不会被清除。";
-      confirmOkBtn.textContent = "清除";
+        t("将清除已完成、失败和已中断的任务记录。进行中和排队中的任务不会被清除。");
+      confirmOkBtn.textContent = t("清除");
     } else if (kind === "delete-drive") {
       state.deleteSessionId = sessionId;
-      confirmTitle.textContent = "删除连接";
-      confirmDesc.textContent = "删除后将从「网盘连接」列表和本地缓存中移除。不会影响聊天会话。";
-      confirmOkBtn.textContent = "删除";
+      confirmTitle.textContent = t("删除连接");
+      confirmDesc.textContent = t("删除后将从「网盘连接」列表和本地缓存中移除。不会影响聊天会话。");
+      confirmOkBtn.textContent = t("删除");
     } else {
       state.deleteSessionId = sessionId;
-      confirmTitle.textContent = "删除会话";
-      confirmDesc.textContent = "删除后将从列表和本地缓存中移除。";
-      confirmOkBtn.textContent = "删除";
+      confirmTitle.textContent = t("删除会话");
+      confirmDesc.textContent = t("删除后将从列表和本地缓存中移除。");
+      confirmOkBtn.textContent = t("删除");
     }
     openModal("confirm");
   }
@@ -7334,6 +7845,12 @@
   }
 
   function onConfirmOk() {
+    if (state.confirmKind === "renew-token") {
+      state.confirmKind = "";
+      closeModal();
+      openPortalOrders();
+      return;
+    }
     if (state.confirmKind === "busy-message" || state.confirmKind === "info") {
       state.confirmKind = "";
       state.deleteMessageId = null;
@@ -7422,7 +7939,7 @@
     const token = newPeerToken.value.trim();
     const pass = newPeerPass.value.trim();
     if (!token) {
-      newSessionError.textContent = "请输入对方 Token";
+      newSessionError.textContent = t("请输入对方 Token");
       newSessionError.hidden = false;
       return;
     }
@@ -7431,7 +7948,7 @@
         return item.peerToken === token;
       })
     ) {
-      newSessionError.textContent = "该会话已存在";
+      newSessionError.textContent = t("该会话已存在");
       newSessionError.hidden = false;
       return;
     }
@@ -7463,7 +7980,7 @@
       .catch(function (err) {
         const text = String((err && err.message) || err || "");
         newSessionError.textContent =
-          text.indexOf("session-exists") >= 0 ? "该会话已存在" : "保存会话失败";
+          text.indexOf("session-exists") >= 0 ? t("该会话已存在") : t("保存会话失败");
         newSessionError.hidden = false;
       });
   }
@@ -7473,7 +7990,7 @@
     const token = newDriveToken.value.trim();
     const pass = newDrivePass ? newDrivePass.value.trim() : "";
     if (!token) {
-      newDriveError.textContent = "请输入网盘 Token";
+      newDriveError.textContent = t("请输入网盘 Token");
       newDriveError.hidden = false;
       return;
     }
@@ -7482,7 +7999,7 @@
         return item.peerToken === token;
       })
     ) {
-      newDriveError.textContent = "该网盘已存在";
+      newDriveError.textContent = t("该网盘已存在");
       newDriveError.hidden = false;
       return;
     }
@@ -7504,17 +8021,32 @@
       .catch(function (err) {
         const text = String((err && err.message) || err || "");
         newDriveError.textContent =
-          text.indexOf("drive-exists") >= 0 ? "该网盘已存在" : "保存网盘失败";
+          text.indexOf("drive-exists") >= 0 ? t("该网盘已存在") : t("保存网盘失败");
         newDriveError.hidden = false;
       });
   }
 
   function saveRemark() {
+    if (state.remarkKind === "account") {
+      const token = state.user && state.user.token ? state.user.token : "";
+      const remark = remarkInput.value.trim();
+      state.remarkKind = "";
+      closeModal();
+      if (!token) return;
+      tauriInvoke("saved_accounts_update_remark", { token: token, remark: remark })
+        .then(applySavedAccounts)
+        .catch(function () {})
+        .finally(function () {
+          renderAccountRemark();
+        });
+      return;
+    }
     const session = findItem(state.remarkSessionId);
     if (session) {
       session.remark = remarkInput.value.trim();
       persistItemUpdate(session);
     }
+    state.remarkKind = "";
     closeModal();
     renderWorkspace();
   }

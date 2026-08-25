@@ -31,6 +31,7 @@ sync_ui() {
   cp -f "${PROJECT_ROOT}/css/app.css" "${UI_DIR}/css/app.css"
   cp -f "${PROJECT_ROOT}/css/screenshot.css" "${UI_DIR}/css/screenshot.css"
   cp -f "${PROJECT_ROOT}/js/app.js" "${UI_DIR}/js/app.js"
+  cp -f "${PROJECT_ROOT}/js/i18n.js" "${UI_DIR}/js/i18n.js"
   cp -f "${PROJECT_ROOT}/js/screenshot.js" "${UI_DIR}/js/screenshot.js"
   if [[ -f "${ASSETS_DIR}/file2file_logo.png" ]]; then
     cp -f "${ASSETS_DIR}/file2file_logo.png" "${UI_DIR}/assets/file2file_logo.png"

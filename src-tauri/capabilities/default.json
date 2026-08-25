@@ -16,6 +16,7 @@
     "core:event:default",
     "opener:default",
     "allow-webrpc",
+    "allow-portal",
     "allow-saved-accounts",
     "allow-saved-sessions",
     "allow-saved-drives",

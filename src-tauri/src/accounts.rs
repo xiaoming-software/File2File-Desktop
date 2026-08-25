@@ -11,6 +11,8 @@ pub struct SavedAccount {
     pub password: String,
     #[serde(default)]
     pub passphrase: String,
+    #[serde(default)]
+    pub remark: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -61,6 +63,12 @@ pub fn saved_accounts_upsert(
     }
 
     let mut data = load_file()?;
+    let prev_remark = data
+        .accounts
+        .iter()
+        .find(|item| item.token == token)
+        .map(|item| item.remark.clone())
+        .unwrap_or_default();
     data.accounts.retain(|item| item.token != token);
     data.accounts.insert(
         0,
@@ -68,6 +76,7 @@ pub fn saved_accounts_upsert(
             token,
             password,
             passphrase,
+            remark: prev_remark,
         },
     );
     save_file(&data)?;
@@ -79,6 +88,28 @@ pub fn saved_accounts_delete(token: String) -> Result<Vec<SavedAccount>, String>
     let token = token.trim().to_string();
     let mut data = load_file()?;
     data.accounts.retain(|item| item.token != token);
+    save_file(&data)?;
+    Ok(data.accounts)
+}
+
+#[tauri::command]
+pub fn saved_accounts_update_remark(
+    token: String,
+    remark: String,
+) -> Result<Vec<SavedAccount>, String> {
+    let token = token.trim().to_string();
+    let remark = remark.trim().to_string();
+    if token.is_empty() {
+        return Err("token-empty".into());
+    }
+
+    let mut data = load_file()?;
+    let item = data
+        .accounts
+        .iter_mut()
+        .find(|item| item.token == token)
+        .ok_or_else(|| "account-not-found".to_string())?;
+    item.remark = remark;
     save_file(&data)?;
     Ok(data.accounts)
 }

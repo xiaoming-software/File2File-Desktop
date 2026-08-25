@@ -1,4 +1,4 @@
 [[permission]]
 identifier = "allow-saved-accounts"
 description = "Allow reading and writing saved login accounts"
-commands.allow = ["saved_accounts_list", "saved_accounts_upsert", "saved_accounts_delete"]
+commands.allow = ["saved_accounts_list", "saved_accounts_upsert", "saved_accounts_delete", "saved_accounts_update_remark"]
