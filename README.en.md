@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  A desktop app for large files, cross-device work, and access to a disk you run yourself. Log in with a webrpc Token to chat, send files, manage your own drive, or remotely control a Windows PC.
+  A desktop app for large files, cross-device work, and access to a disk you run yourself. On the login screen you can <strong>register in one click</strong> and get a webrpc Token automatically—or sign in with an existing Token—to chat, send files, manage your drive, or remotely control a Windows PC.
 </p>
 
 <p align="center">
@@ -44,6 +44,8 @@
   - [Voice and screenshots](#voice-and-screenshots)
 - [Download and run](#download-and-run)
 - [How to use](#how-to-use)
+  - [Option A: One-click register (recommended)](#option-a-one-click-register-recommended)
+  - [Option B: Sign in with an existing Token](#option-b-sign-in-with-an-existing-token)
 - [Current limits](#current-limits)
 - [Build from source](#build-from-source)
 - [FAQ](#faq)
@@ -80,7 +82,7 @@ This is not a reskinned consumer cloud disk, and it is not a paid remote-control
 <p align="center">
   <img src="assets/loginp.png" alt="File2File login screen using a webrpc Token" width="880">
 </p>
-<p align="center"><em>Login: join the webrpc network with a Token</em></p>
+<p align="center"><em>Login: one-click register for a Token, or sign in with one you already have</em></p>
 
 <p align="center">
   <img src="assets/sms.png" alt="File2File chat session with large file transfer progress" width="880">
@@ -171,6 +173,7 @@ See [Current limits](#current-limits) for what is not supported yet.
 
 | Strength | What it means |
 | --- | --- |
+| **Zero setup** | **One-click register** on the login page: creates a webrpc account, claims free Token(s), fills the form—confirm and you are in. No browser signup first. |
 | **P2P direct** | After the handshake, data goes peer to peer. No public IP. No upload-then-download detour. |
 | **Encrypted by default** | The transfer channel is encrypted. Token plus an optional passphrase. |
 | **Your disk, your path** | You pick the folder and the machine. File2File only connects and reads/writes. |
@@ -204,20 +207,35 @@ That repo includes macOS / Linux / Windows binaries and the source. When you use
 
 ## How to use
 
-Every peer (and the NAS server) needs a Token from [webrpc.cn](https://webrpc.cn).
+Every peer (and the NAS server) needs a **Token** and **password** from [webrpc.cn](https://webrpc.cn). File2File offers two paths; new users should start with one-click register.
 
-### 1. Get a Token
+### Option A: One-click register (recommended)
 
-Open [https://webrpc.cn](https://webrpc.cn), register, and copy the **Token** and **password**.
+For first-time users who do not have a Token yet. Everything happens on the login page.
 
-### 2. Log in to File2File
+1. Launch File2File and click **Quick register** (一键注册).
+2. The app automatically: creates a webrpc console account → signs in → claims your free device Token(s), with a progress dialog along the way.
+3. When done, **Token, password, and a random auth passphrase** are filled into the form and a summary dialog lets you review them.
+4. Click **Sign in now** to enter the workspace, or **Sign in later** to check the fields and log in manually.
 
-1. Launch the downloaded app.
-2. Enter Token and password.
+**About the free Token**
+
+- One-click registration grants **2 device Tokens** ready for File2File and P2P sessions.
+- Free Tokens include an **expiry date (about one month)**. The top bar warns you before expiry; one-click users can open **Manage tokens** to reach the [webrpc console](https://www.webrpc.cn/) for email, all Tokens, and renewal.
+- Plans and pricing are defined on [webrpc.cn](https://webrpc.cn).
+
+> Tip: enable **Remember token** to pick saved accounts from the dropdown later. You can set an **account label** per saved Token so multiple logins stay easy to tell apart.
+
+### Option B: Sign in with an existing Token
+
+If you already registered at [webrpc.cn](https://webrpc.cn):
+
+1. Launch File2File.
+2. Enter **Token** and **password** (from the web console).
 3. **Auth passphrase** is optional. If both sides use the same one, unknown peers cannot connect.
-4. Check **Save Token** if you want it filled next time, then log in.
+4. Check **Remember token** if you want it filled next time, then sign in.
 
-The top bar shows Token, passphrase, login time, and live session count.
+The top bar shows Token, passphrase, status, and live session count. One-click users also see Token expiry and **Manage tokens**.
 
 ### 3. Chat and send files to another PC
 
@@ -314,6 +332,12 @@ No. Use the binaries in [dist-tauri](https://github.com/xiaoming-software/File2F
 
 **Does it work without a public IP?**  
 Yes. webrpc does not require you to expose a port or own a static public address.
+
+**Do I have to sign up on the website first?**  
+No. Use **Quick register** on the login page to create an account and claim free Token(s) (about one month of validity), then confirm sign-in. Existing Token holders can still paste credentials manually.
+
+**How long does the free Token last?**  
+Free Tokens from one-click register expire after **about one month**. The app warns you beforehand; use **Manage tokens** in the top bar (one-click users) or visit [webrpc.cn](https://webrpc.cn) to renew.
 
 **What if I lose the Token?**  
 Follow the process on [webrpc.cn](https://webrpc.cn). Do not share the Token or passphrase with people you do not trust.
