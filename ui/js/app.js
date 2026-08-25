@@ -1341,6 +1341,7 @@
   }
 
   loadSavedAccounts();
+  refreshQuickRegisterQuota();
   bindTokenDropdown();
   [tokenInput, passwordInput, passphraseInput].forEach(function (el) {
     if (el) el.addEventListener("input", hideLoginError);
@@ -1408,6 +1409,7 @@
     syncPasswordToggleLabel("toggle-connect-pass", connectPeerPass, "显示认证口令", "隐藏认证口令");
     if (loginBtn) setLoggingIn(!!loginBtn.disabled && pageLogin && !pageLogin.hidden);
     renderTokenDropdown();
+    refreshQuickRegisterQuota();
     if (!state.user) return;
     if (infoPassphrase && state.user) {
       infoPassphrase.textContent = state.user.passphrase ? state.user.passphrase : t("未设置");
@@ -1566,7 +1568,7 @@
   function closeRegisterProgressModal() {
     setRegisterProgressBusy(false);
     state.registerPending = null;
-    if (quickRegisterBtn) quickRegisterBtn.disabled = false;
+    refreshQuickRegisterQuota();
     if (modalRegisterProgress) modalRegisterProgress.hidden = true;
     if (
       modalRoot &&
@@ -1584,9 +1586,34 @@
 
   function registerErrorMessage(err) {
     const text = invokeErrorText(err);
+    if (text.indexOf("register-limit-reached") >= 0) {
+      return t("本机一键注册次数已达上限（2 次）。请前往 webrpc.cn 自行注册。");
+    }
     if (text.indexOf("register-timeout") >= 0) return t("注册超时，请稍后重试");
     if (text.indexOf("tokens-not-ready") >= 0) return t("Token 尚未就绪，请稍后重试");
     return t("注册失败，请检查网络后重试");
+  }
+
+  function applyQuickRegisterQuota(quota) {
+    if (!quickRegisterBtn) return;
+    const remaining = quota && typeof quota.remaining === "number" ? quota.remaining : 0;
+    const limited = remaining <= 0;
+    quickRegisterBtn.disabled = limited;
+    quickRegisterBtn.title = limited
+      ? t("本机一键注册次数已达上限（2 次）。请前往 webrpc.cn 自行注册。")
+      : "";
+    if (limited) {
+      quickRegisterBtn.textContent = t("一键注册已达上限");
+    } else if (window.F2F_I18N) {
+      quickRegisterBtn.textContent = t("一键注册");
+    }
+  }
+
+  function refreshQuickRegisterQuota() {
+    if (!isTauri() || !quickRegisterBtn) return Promise.resolve();
+    return tauriInvoke("portal_quick_register_quota")
+      .then(applyQuickRegisterQuota)
+      .catch(function () {});
   }
 
   function withRegisterTimeout(promise) {
@@ -1609,16 +1636,24 @@
 
   function startQuickRegister() {
     if (!isTauri() || !quickRegisterBtn || quickRegisterBtn.disabled || loginBtn.disabled) return;
-    quickRegisterBtn.disabled = true;
-    openRegisterProgressModal();
-    const passphrase = generatePassphrase();
-    withRegisterTimeout(tauriInvoke("webrpc_auto_register"))
-      .then(function (result) {
-        showRegisterSuccess(result, passphrase);
-      })
-      .catch(function (err) {
-        failRegisterProgress(registerErrorMessage(err));
-      });
+    refreshQuickRegisterQuota().then(function () {
+      if (quickRegisterBtn.disabled) {
+        showLoginError(t("本机一键注册次数已达上限（2 次）。请前往 webrpc.cn 自行注册。"));
+        return;
+      }
+      quickRegisterBtn.disabled = true;
+      openRegisterProgressModal();
+      const passphrase = generatePassphrase();
+      withRegisterTimeout(tauriInvoke("webrpc_auto_register"))
+        .then(function (result) {
+          showRegisterSuccess(result, passphrase);
+          refreshQuickRegisterQuota();
+        })
+        .catch(function (err) {
+          failRegisterProgress(registerErrorMessage(err));
+          refreshQuickRegisterQuota();
+        });
+    });
   }
 
   function daysUntilExpiry(ms) {

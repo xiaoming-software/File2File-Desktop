@@ -10,6 +10,8 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 const API_BASE: &str = "https://api.webrpc.cn/webrpc";
 const PORTAL_FILE: &str = "portal_accounts.json";
+const QUICK_REGISTER_FILE: &str = "quick_register.json";
+const QUICK_REGISTER_LIMIT: u32 = 2;
 const REGISTER_TOTAL_TIMEOUT: Duration = Duration::from_secs(30);
 const CONSOLE_WINDOW_LABEL: &str = "webrpc-console";
 const CONSOLE_URL: &str = "https://www.webrpc.cn/controllor.html";
@@ -47,6 +49,21 @@ struct PortalFile {
     links: Vec<PortalLink>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct QuickRegisterState {
+    #[serde(default)]
+    count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickRegisterQuota {
+    pub count: u32,
+    pub limit: u32,
+    pub remaining: u32,
+}
+
 fn portal_path() -> Result<PathBuf, String> {
     Ok(storage::app_data_dir()?.join(PORTAL_FILE))
 }
@@ -68,6 +85,55 @@ fn save_portal_file(data: &PortalFile) -> Result<(), String> {
     let text =
         serde_json::to_string_pretty(data).map_err(|err| format!("序列化控制台账户失败: {err}"))?;
     fs::write(&path, text).map_err(|err| format!("写入控制台账户失败: {err}"))?;
+    Ok(())
+}
+
+fn quick_register_path() -> Result<PathBuf, String> {
+    Ok(storage::app_data_dir()?.join(QUICK_REGISTER_FILE))
+}
+
+fn load_quick_register_state() -> Result<QuickRegisterState, String> {
+    let path = quick_register_path()?;
+    if !path.exists() {
+        return Ok(QuickRegisterState::default());
+    }
+    let raw = fs::read_to_string(&path).map_err(|err| format!("读取一键注册次数失败: {err}"))?;
+    if raw.trim().is_empty() {
+        return Ok(QuickRegisterState::default());
+    }
+    serde_json::from_str::<QuickRegisterState>(&raw)
+        .map_err(|err| format!("解析一键注册次数失败: {err}"))
+}
+
+fn save_quick_register_state(data: &QuickRegisterState) -> Result<(), String> {
+    let path = quick_register_path()?;
+    let text =
+        serde_json::to_string_pretty(data).map_err(|err| format!("序列化一键注册次数失败: {err}"))?;
+    fs::write(&path, text).map_err(|err| format!("写入一键注册次数失败: {err}"))?;
+    Ok(())
+}
+
+fn quick_register_quota() -> Result<QuickRegisterQuota, String> {
+    let count = load_quick_register_state()?.count;
+    let remaining = QUICK_REGISTER_LIMIT.saturating_sub(count);
+    Ok(QuickRegisterQuota {
+        count,
+        limit: QUICK_REGISTER_LIMIT,
+        remaining,
+    })
+}
+
+fn bump_quick_register_count() -> Result<(), String> {
+    let mut data = load_quick_register_state()?;
+    data.count = data.count.saturating_add(1);
+    save_quick_register_state(&data)
+}
+
+fn ensure_quick_register_allowed() -> Result<(), String> {
+    let quota = quick_register_quota()?;
+    if quota.remaining == 0 {
+        return Err("register-limit-reached".into());
+    }
     Ok(())
 }
 
@@ -271,12 +337,33 @@ fn js_string(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
 }
 
+fn console_fresh_url() -> String {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    // Cache-bust HTML entry so Gatekeeper-like WebView caches cannot reuse a stale shell.
+    format!("{CONSOLE_URL}?_f2f_cb={ts}")
+}
+
 fn console_init_script(session_token: &str, email: &str) -> String {
     format!(
         r#"(function() {{
   try {{
     localStorage.setItem("webrpc_token", {token});
     localStorage.setItem("webrpc_user_email", {email});
+  }} catch (e) {{}}
+  try {{
+    if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {{
+      navigator.serviceWorker.getRegistrations().then(function (regs) {{
+        return Promise.all(regs.map(function (reg) {{ return reg.unregister(); }}));
+      }}).catch(function () {{}});
+    }}
+    if (window.caches && caches.keys) {{
+      caches.keys().then(function (keys) {{
+        return Promise.all(keys.map(function (key) {{ return caches.delete(key); }}));
+      }}).catch(function () {{}});
+    }}
   }} catch (e) {{}}
 }})();"#,
         token = js_string(session_token),
@@ -285,29 +372,33 @@ fn console_init_script(session_token: &str, email: &str) -> String {
 }
 
 fn open_console_window(app: &AppHandle, session_token: &str, email: &str) -> Result<(), String> {
-    let url = CONSOLE_URL
+    // Always tear down the previous console window so the next load cannot reuse an in-memory
+    // document / HTTP cache of an outdated webrpc.cn build.
+    if let Some(win) = app.get_webview_window(CONSOLE_WINDOW_LABEL) {
+        let _ = win.clear_all_browsing_data();
+        let _ = win.destroy();
+        thread::sleep(Duration::from_millis(120));
+    }
+
+    let fresh = console_fresh_url();
+    let url = fresh
         .parse()
         .map_err(|_| "invalid-console-url".to_string())?;
 
-    if let Some(win) = app.get_webview_window(CONSOLE_WINDOW_LABEL) {
-        let script = format!(
-            "{}\nlocation.href = {};",
-            console_init_script(session_token, email),
-            js_string(CONSOLE_URL),
-        );
-        win.eval(&script)
-            .map_err(|err| format!("console-refresh-failed: {err}"))?;
-        let _ = win.show();
-        let _ = win.set_focus();
-        return Ok(());
-    }
-
-    WebviewWindowBuilder::new(app, CONSOLE_WINDOW_LABEL, WebviewUrl::External(url))
+    let mut builder = WebviewWindowBuilder::new(app, CONSOLE_WINDOW_LABEL, WebviewUrl::External(url))
         .title("webrpc Console")
         .inner_size(1180.0, 760.0)
         .min_inner_size(960.0, 640.0)
         .center()
-        .initialization_script(&console_init_script(session_token, email))
+        .initialization_script(&console_init_script(session_token, email));
+
+    // WebView2 only: avoid reusing cached HTML/JS/CSS for the console origin.
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.additional_browser_args("--disable-http-cache");
+    }
+
+    builder
         .build()
         .map_err(|err| format!("open-console-failed: {err}"))?;
 
@@ -339,6 +430,11 @@ fn refresh_expire_for_device(device_token: &str) -> Result<i64, String> {
 }
 
 #[tauri::command]
+pub fn portal_quick_register_quota() -> Result<QuickRegisterQuota, String> {
+    quick_register_quota()
+}
+
+#[tauri::command]
 pub fn portal_link_get(device_token: String) -> Result<Option<PortalLink>, String> {
     find_portal_link(device_token.trim())
 }
@@ -365,6 +461,7 @@ pub fn portal_open_console(app: AppHandle, device_token: String) -> Result<(), S
 
 #[tauri::command]
 pub fn webrpc_auto_register(app: AppHandle) -> Result<AutoRegisterResult, String> {
+    ensure_quick_register_allowed()?;
     let (tx, rx) = mpsc::channel();
     let app_worker = app.clone();
     thread::spawn(move || {
@@ -372,7 +469,12 @@ pub fn webrpc_auto_register(app: AppHandle) -> Result<AutoRegisterResult, String
         let _ = tx.send(result);
     });
     match rx.recv_timeout(REGISTER_TOTAL_TIMEOUT) {
-        Ok(result) => result,
+        Ok(result) => {
+            let result = result?;
+            // Best-effort: registration already succeeded; don't fail the UI if count write fails.
+            let _ = bump_quick_register_count();
+            Ok(result)
+        }
         Err(_) => Err("register-timeout".into()),
     }
 }

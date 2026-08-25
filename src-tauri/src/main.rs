@@ -64,6 +64,7 @@ fn main() {
             accounts::saved_accounts_delete,
             accounts::saved_accounts_update_remark,
             portal::webrpc_auto_register,
+            portal::portal_quick_register_quota,
             portal::portal_link_get,
             portal::portal_link_save,
             portal::portal_refresh_expiry,

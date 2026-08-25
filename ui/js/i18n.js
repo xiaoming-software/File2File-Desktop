@@ -42,6 +42,8 @@
     "无法打开控制台，请检查网络后重试": "Could not open the console. Check your network and try again.",
     "注册失败，请检查网络后重试": "Registration failed. Check your network and try again.",
     "注册超时，请稍后重试": "Registration timed out. Please try again later.",
+    "本机一键注册次数已达上限（2 次）。请前往 webrpc.cn 自行注册。": "Quick register is limited to 2 times on this device. Please register at webrpc.cn.",
+    "一键注册已达上限": "Quick register limit reached",
     "Token 尚未就绪，请稍后重试": "Tokens are not ready yet. Please try again later.",
     "Token 过期时间": "Token expires",
     "续费": "Renew",

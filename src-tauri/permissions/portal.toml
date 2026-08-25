@@ -3,6 +3,7 @@ identifier = "allow-portal"
 description = "Allow webrpc portal auto register and token expiry refresh"
 commands.allow = [
   "webrpc_auto_register",
+  "portal_quick_register_quota",
   "portal_link_get",
   "portal_link_save",
   "portal_refresh_expiry",
