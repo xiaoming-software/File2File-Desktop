@@ -6,14 +6,14 @@ use std::path::PathBuf;
 use std::thread;
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter};
+use tauri_plugin_opener::OpenerExt;
 
 const API_BASE: &str = "https://api.webrpc.cn/webrpc";
 const PORTAL_FILE: &str = "portal_accounts.json";
 const QUICK_REGISTER_FILE: &str = "quick_register.json";
 const QUICK_REGISTER_LIMIT: u32 = 2;
 const REGISTER_TOTAL_TIMEOUT: Duration = Duration::from_secs(30);
-const CONSOLE_WINDOW_LABEL: &str = "webrpc-console";
 const CONSOLE_URL: &str = "https://www.webrpc.cn/controllor.html";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -333,76 +333,37 @@ fn find_portal_link(device_token: &str) -> Result<Option<PortalLink>, String> {
         .find(|item| item.device_token == token))
 }
 
-fn js_string(value: &str) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
-}
-
-fn console_fresh_url() -> String {
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    // Cache-bust HTML entry so Gatekeeper-like WebView caches cannot reuse a stale shell.
-    format!("{CONSOLE_URL}?_f2f_cb={ts}")
-}
-
-fn console_init_script(session_token: &str, email: &str) -> String {
-    format!(
-        r#"(function() {{
-  try {{
-    localStorage.setItem("webrpc_token", {token});
-    localStorage.setItem("webrpc_user_email", {email});
-  }} catch (e) {{}}
-  try {{
-    if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {{
-      navigator.serviceWorker.getRegistrations().then(function (regs) {{
-        return Promise.all(regs.map(function (reg) {{ return reg.unregister(); }}));
-      }}).catch(function () {{}});
-    }}
-    if (window.caches && caches.keys) {{
-      caches.keys().then(function (keys) {{
-        return Promise.all(keys.map(function (key) {{ return caches.delete(key); }}));
-      }}).catch(function () {{}});
-    }}
-  }} catch (e) {{}}
-}})();"#,
-        token = js_string(session_token),
-        email = js_string(email),
-    )
-}
-
-fn open_console_window(app: &AppHandle, session_token: &str, email: &str) -> Result<(), String> {
-    // Always tear down the previous console window so the next load cannot reuse an in-memory
-    // document / HTTP cache of an outdated webrpc.cn build.
-    if let Some(win) = app.get_webview_window(CONSOLE_WINDOW_LABEL) {
-        let _ = win.clear_all_browsing_data();
-        let _ = win.destroy();
-        thread::sleep(Duration::from_millis(120));
-    }
-
-    let fresh = console_fresh_url();
-    let url = fresh
-        .parse()
-        .map_err(|_| "invalid-console-url".to_string())?;
-
-    let mut builder = WebviewWindowBuilder::new(app, CONSOLE_WINDOW_LABEL, WebviewUrl::External(url))
-        .title("webrpc Console")
-        .inner_size(1180.0, 760.0)
-        .min_inner_size(960.0, 640.0)
-        .center()
-        .initialization_script(&console_init_script(session_token, email));
-
-    // WebView2 only: avoid reusing cached HTML/JS/CSS for the console origin.
-    #[cfg(target_os = "windows")]
+fn create_console_sso_link(email: &str, password: &str) -> Result<String, String> {
+    let body = serde_json::json!({
+        "__url": format!("{API_BASE}/createConsoleSsoLink"),
+        "email": email,
+        "password": password,
+    });
+    let json = post_json(&body, None)?;
+    if let Some(open_url) = json
+        .get("data")
+        .and_then(|d| d.get("openUrl"))
+        .and_then(|v| v.as_str())
     {
-        builder = builder.additional_browser_args("--disable-http-cache");
+        return Ok(open_url.to_string());
     }
+    json.get("data")
+        .and_then(|d| d.get("ssoToken"))
+        .and_then(|v| v.as_str())
+        .map(|sso| format!("{CONSOLE_URL}?sso={sso}"))
+        .ok_or_else(|| "sso-link-missing".into())
+}
 
-    builder
-        .build()
-        .map_err(|err| format!("open-console-failed: {err}"))?;
+#[tauri::command]
+pub fn portal_open_console(app: AppHandle, device_token: String) -> Result<(), String> {
+    let link = find_portal_link(device_token.trim())?
+        .filter(|item| item.auto_registered)
+        .ok_or_else(|| "portal-link-not-found".to_string())?;
 
-    Ok(())
+    let open_url = create_console_sso_link(&link.email, &link.portal_password)?;
+    app.opener()
+        .open_url(open_url, None::<&str>)
+        .map_err(|err| format!("open-browser-failed: {err}"))
 }
 
 fn refresh_expire_for_device(device_token: &str) -> Result<i64, String> {
@@ -447,16 +408,6 @@ pub fn portal_link_save(link: PortalLink) -> Result<(), String> {
 #[tauri::command]
 pub fn portal_refresh_expiry(device_token: String) -> Result<i64, String> {
     refresh_expire_for_device(device_token.trim())
-}
-
-#[tauri::command]
-pub fn portal_open_console(app: AppHandle, device_token: String) -> Result<(), String> {
-    let link = find_portal_link(device_token.trim())?
-        .filter(|item| item.auto_registered)
-        .ok_or_else(|| "portal-link-not-found".to_string())?;
-
-    let session_token = portal_login(&link.email, &link.portal_password)?;
-    open_console_window(&app, &session_token, &link.email)
 }
 
 #[tauri::command]

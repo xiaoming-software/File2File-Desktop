@@ -1,36 +1,21 @@
-<p align="center">
-  <img src="ui/assets/file2file_logo.png" width="96" alt="File2File 标志">
-</p>
+![File2File 标志](ui/assets/file2file_logo.png)
 
-<h1 align="center">File2File</h1>
+# File2File
 
-<p align="center">
-  <strong>点对点文件传输、个人网盘与远程桌面桌面客户端</strong><br>
-  P2P 直连 · 默认加密 · 免费使用 · Windows / macOS / Linux
-</p>
+**点对点文件传输、个人网盘与远程桌面桌面客户端**  
+P2P 直连 · 默认加密 · 免费使用 · Windows / macOS / Linux
 
-<p align="center">
-  专为大文件、跨设备协作和个人 NAS 访问设计的桌面应用。登录页可<strong>一键注册</strong>并自动领取 webrpc Token，零门槛直连；也可使用已有 Token 登录，即可聊天、传文件、管理网盘或远程控制 Windows 电脑。
-</p>
+专为大文件、跨设备协作和个人 NAS 访问设计的桌面应用。登录页可**一键注册**并自动领取 webrpc Token，零门槛直连；也可使用已有 Token 登录，即可聊天、传文件、管理网盘或远程控制 Windows 电脑。
 
-<p align="center">
-  <a href="README.md">简体中文</a> ·
-  <a href="README.en.md">English</a>
-</p>
+[简体中文](README.md) · [English](README.en.md)
 
-<p align="center">
-  <a href="https://github.com/xiaoming-software/File2File-Desktop/tree/main/dist-tauri"><img src="https://img.shields.io/badge/download-预编译包-16a34a" alt="下载预编译包"></a>
-  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-1d4ed8" alt="支持 macOS、Windows、Linux">
-  <img src="https://img.shields.io/badge/P2P-webrpc-0ea5e9" alt="基于 webrpc">
-  <img src="https://img.shields.io/badge/Tauri-2-24c8db" alt="Tauri 2">
-  <img src="https://img.shields.io/badge/version-0.1.0-64748b" alt="版本 0.1.0">
-</p>
+![下载预编译包](https://img.shields.io/badge/download-预编译包-16a34a)![支持 macOS、Windows、Linux](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-1d4ed8)![基于 webrpc](https://img.shields.io/badge/P2P-webrpc-0ea5e9)![Tauri 2](https://img.shields.io/badge/Tauri-2-24c8db)![版本 0.1.0](https://img.shields.io/badge/version-0.1.0-64748b)
 
-<p align="center">
-  <a href="https://github.com/xiaoming-software/File2File-Desktop/tree/main/dist-tauri"><strong>下载已编译程序，解压或安装后即可使用 →</strong></a>
-</p>
+**[下载已编译程序，解压或安装后即可使用 →](https://github.com/xiaoming-software/File2File-Desktop/tree/main/dist-tauri)**
 
 ---
+
+
 
 ## 目录
 
@@ -54,6 +39,8 @@
 
 ---
 
+
+
 ## File2File 是什么
 
 **File2File** 是一款基于 [webrpc](https://webrpc.cn) 的跨平台桌面客户端，把三件事放在同一个窗口里：
@@ -68,6 +55,8 @@
 
 ---
 
+
+
 ## 适合谁用
 
 - 经常在 Windows、Mac、Linux 之间搬 **GB 级安装包、镜像、素材** 的人
@@ -77,41 +66,41 @@
 
 ---
 
+
+
 ## 界面预览
 
-<p align="center">
-  <img src="assets/loginp.png" alt="File2File 登录界面，使用 webrpc Token 接入网络" width="880">
-</p>
-<p align="center"><em>登录：支持一键注册领取 Token，或填入已有 Token 直接登录</em></p>
+![File2File 登录界面，使用 webrpc Token 接入网络](assets/loginp.png)
 
-<p align="center">
-  <img src="assets/sms.png" alt="File2File 会话窗口，文字消息与大文件传输进度" width="880">
-</p>
-<p align="center"><em>会话：文字、截图与大文件走同一条加密通道（示例：2.76 GB，平均 3.93 MB/s）</em></p>
+*登录：支持一键注册领取 Token，或填入已有 Token 直接登录*
 
-<p align="center">
-  <img src="assets/yuying.png" alt="File2File 语音通话来电弹窗" width="880">
-</p>
-<p align="center"><em>语音：来电弹窗，一键接听或拒绝</em></p>
+![File2File 会话窗口，文字消息与大文件传输进度](assets/sms.png)
 
-<p align="center">
-  <img src="assets/mywebdisk-server-run.png" alt="在终端启动 mywebdisk-server 个人 NAS 服务端" width="880">
-</p>
-<p align="center"><em>个人网盘服务端：在存放文件的那台机器上启动 mywebdisk-server</em></p>
+*会话：文字、截图与大文件走同一条加密通道（示例：2.76 GB，平均 3.93 MB/s）*
 
-<p align="center">
-  <img src="assets/mywebdisk-client.png" alt="File2File 网盘资源管理器，已连接家里网盘并显示容量与文件列表" width="880">
-</p>
-<p align="center"><em>网盘资源管理器：连接自己的网盘后，可浏览容量、上传下载、搜索文件</em></p>
+![File2File 语音通话来电弹窗](assets/yuying.png)
 
-<p align="center">
-  <img src="assets/yuancheng-win.png" alt="File2File 远程控制 Windows 桌面，显示全屏与结束按钮" width="880">
-</p>
-<p align="center"><em>远程桌面：控制对方 Windows 电脑，支持全屏和鼠标操作</em></p>
+*语音：来电弹窗，一键接听或拒绝*
+
+![在终端启动 mywebdisk-server 个人 NAS 服务端](assets/mywebdisk-server-run.png)
+
+*个人网盘服务端：在存放文件的那台机器上启动 mywebdisk-server*
+
+![File2File 网盘资源管理器，已连接家里网盘并显示容量与文件列表](assets/mywebdisk-client.png)
+
+*网盘资源管理器：连接自己的网盘后，可浏览容量、上传下载、搜索文件*
+
+![File2File 远程控制 Windows 桌面，显示全屏与结束按钮](assets/yuancheng-win.png)
+
+*远程桌面：控制对方 Windows 电脑，支持全屏和鼠标操作*
 
 ---
 
+
+
 ## 核心功能
+
+
 
 ### 聊天与大文件传输
 
@@ -120,24 +109,28 @@
 - 选择文件或拖进窗口即可发送；进度、耗时、均速显示在卡片上
 - 针对大文件设计，GB 级内容可以一次传完
 
+
+
 ### 个人网盘 / NAS
 
 在家里电脑、闲置主机或任意目录上运行配套的 **[mywebdisk-server](https://github.com/xiaoming-software/mywebdisk)**，再用 File2File 左侧「网盘连接」连上，即可当个人云盘用。数据留在你指定的目录里，读写都走 webrpc 加密通道。
 
 服务端源码与各平台预编译程序都在仓库里，下载即可运行，不必自己编译：
 
-**https://github.com/xiaoming-software/mywebdisk**
+**[https://github.com/xiaoming-software/mywebdisk](https://github.com/xiaoming-software/mywebdisk)**
 
 资源管理器支持：
 
-| 能力 | 说明 |
-| --- | --- |
-| 浏览 | 列表 / 图标视图，面包屑导航，容量与剩余空间 |
-| 上传 | 按钮上传，或把本地文件拖进当前目录 |
-| 下载 | 右键下载；任务面板可看进度、重试 |
-| 整理 | 新建、重命名、移动、删除、压缩 |
-| 搜索 | 顶部「搜索网盘」 |
-| 多选 | 框选或批量拖拽移动 |
+
+| 能力  | 说明                      |
+| --- | ----------------------- |
+| 浏览  | 列表 / 图标视图，面包屑导航，容量与剩余空间 |
+| 上传  | 按钮上传，或把本地文件拖进当前目录       |
+| 下载  | 右键下载；任务面板可看进度、重试        |
+| 整理  | 新建、重命名、移动、删除、压缩         |
+| 搜索  | 顶部「搜索网盘」                |
+| 多选  | 框选或批量拖拽移动               |
+
 
 服务端启动示例（在存放文件的那台机器上）：
 
@@ -169,41 +162,51 @@
 
 ---
 
+
+
 ## 为什么选 File2File
 
-| 亮点 | 说明 |
-| --- | --- |
-| **零门槛上手** | 登录页 **一键注册**：自动创建 webrpc 账户、领取免费 Token 并填入登录框，确认后即可使用，无需先去官网折腾。 |
-| **P2P 直连** | 打通后直传，无需公网 IP，也不必先把文件丢到第三方网盘。 |
-| **默认加密** | 传输通道加密；Token + 可选认证口令。 |
-| **个人网盘自己管** | 目录和机器都在你手里，File2File 只负责连上去读写。 |
-| **远控集成在同一客户端** | 聊天、传文件、远控不用来回切换软件。 |
-| **完全免费** | 客户端不向用户收取传输费用。 |
-| **多平台** | macOS、Windows、Linux（x86_64 / ARM64）同一套操作。 |
-| **开箱即用** | [仓库里已有各平台编译产物](https://github.com/xiaoming-software/File2File-Desktop/tree/main/dist-tauri)，下载即可运行。 |
+
+| 亮点             | 说明                                                                                                  |
+| -------------- | --------------------------------------------------------------------------------------------------- |
+| **零门槛上手**      | 登录页 **一键注册**：自动创建 webrpc 账户、领取免费 Token 并填入登录框，确认后即可使用，无需先去官网折腾。                                     |
+| **P2P 直连**     | 打通后直传，无需公网 IP，也不必先把文件丢到第三方网盘。                                                                       |
+| **默认加密**       | 传输通道加密；Token + 可选认证口令。                                                                              |
+| **个人网盘自己管**    | 目录和机器都在你手里，File2File 只负责连上去读写。                                                                      |
+| **远控集成在同一客户端** | 聊天、传文件、远控不用来回切换软件。                                                                                  |
+| **完全免费**       | 客户端不向用户收取传输费用。                                                                                      |
+| **多平台**        | macOS、Windows、Linux（x86_64 / ARM64）同一套操作。                                                           |
+| **开箱即用**       | [仓库里已有各平台编译产物](https://github.com/xiaoming-software/File2File-Desktop/tree/main/dist-tauri)，下载即可运行。 |
+
 
 ---
+
+
 
 ## 直接下载使用
 
 不需要本机安装 Rust 或 Tauri。打开预编译目录，按自己的系统取对应文件即可：
 
-**https://github.com/xiaoming-software/File2File-Desktop/tree/main/dist-tauri**
+**[https://github.com/xiaoming-software/File2File-Desktop/tree/main/dist-tauri](https://github.com/xiaoming-software/File2File-Desktop/tree/main/dist-tauri)**
 
-| 系统 | 目录与文件 | 说明 |
-| --- | --- | --- |
-| Windows 10/11 x64 | [`dist-tauri/windows-x64/File2File.exe`](https://github.com/xiaoming-software/File2File-Desktop/tree/main/dist-tauri/windows-x64) | 需要 WebView2（Win10/11 通常已自带） |
-| macOS 11+ | [`dist-tauri/macos/File2File.app`](https://github.com/xiaoming-software/File2File-Desktop/tree/main/dist-tauri/macos) | 首次打开若被拦截，请在「系统设置 → 隐私与安全性」中允许 |
-| Linux amd64 | [`dist-tauri/linux-amd64/`](https://github.com/xiaoming-software/File2File-Desktop/tree/main/dist-tauri/linux-amd64) 下的 `.deb` | Debian / Ubuntu 等 |
-| Linux arm64 | [`dist-tauri/linux-arm64/`](https://github.com/xiaoming-software/File2File-Desktop/tree/main/dist-tauri/linux-arm64) 下的 `.deb` | 如 ARM 主板、树莓派 64 位 |
+
+| 系统                | 目录与文件                                                                                                                             | 说明                            |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| Windows 10/11 x64 | `[dist-tauri/windows-x64/File2File.exe](https://github.com/xiaoming-software/File2File-Desktop/tree/main/dist-tauri/windows-x64)` | 需要 WebView2（Win10/11 通常已自带）   |
+| macOS 11+         | `[dist-tauri/macos/File2File.app](https://github.com/xiaoming-software/File2File-Desktop/tree/main/dist-tauri/macos)`             | 首次打开若被拦截，请在「系统设置 → 隐私与安全性」中允许 |
+| Linux amd64       | `[dist-tauri/linux-amd64/](https://github.com/xiaoming-software/File2File-Desktop/tree/main/dist-tauri/linux-amd64)` 下的 `.deb`    | Debian / Ubuntu 等             |
+| Linux arm64       | `[dist-tauri/linux-arm64/](https://github.com/xiaoming-software/File2File-Desktop/tree/main/dist-tauri/linux-arm64)` 下的 `.deb`    | 如 ARM 主板、树莓派 64 位             |
+
 
 个人网盘还需要在「有磁盘的那台机器」上另外运行 `mywebdisk-server`。File2File 是客户端，服务端从下面仓库下载预编译程序即可：
 
-**https://github.com/xiaoming-software/mywebdisk**
+**[https://github.com/xiaoming-software/mywebdisk](https://github.com/xiaoming-software/mywebdisk)**
 
 该仓库含 macOS / Linux / Windows 可执行文件，以及源码。用 File2File 连网盘时，一般只需要其中的 **mywebdisk-server**，不必再装它自带的桌面客户端。
 
 ---
+
+
 
 ## 如何使用
 
@@ -226,6 +229,8 @@
 
 > 提示：勾选「保存 Token」后，下次可在下拉列表中快速选择；可为每个已保存 Token 设置 **账号备注**，避免多账号时搞混。
 
+
+
 ### 方式 B：使用已有 Token 登录
 
 若你已在 [webrpc.cn](https://webrpc.cn) 注册并持有 Token：
@@ -243,13 +248,17 @@
 2. 选中会话，点连接，等到「已连接」。
 3. 对方也必须在线。
 
-| 操作 | 做法 |
-| --- | --- |
-| 发文字 | 输入后按 Enter |
-| 发文件 | 点「选择文件」，或把文件拖进窗口 |
-| 发截图 | 点「截图」 |
-| 语音 | 点「语音」，对方选择接听或拒绝 |
+
+| 操作   | 做法                   |
+| ---- | -------------------- |
+| 发文字  | 输入后按 Enter           |
+| 发文件  | 点「选择文件」，或把文件拖进窗口     |
+| 发截图  | 点「截图」                |
+| 语音   | 点「语音」，对方选择接听或拒绝      |
 | 远程控制 | 点「远程控制」，等对方同意（仅电脑会话） |
+
+
+
 
 ### 4. 连接自己的个人网盘
 
@@ -257,6 +266,8 @@
 2. 在 File2File 左侧「网盘连接」点新建，填入 **网盘 Token**（与服务端 `--token` 一致）。
 3. 连接成功后进入资源管理器：看容量、进目录、上传、下载、搜索。
 4. 网盘会话不能发起远程桌面；远控只用于电脑对电脑。
+
+
 
 ### 5. 远程控制对方 Windows
 
@@ -273,6 +284,8 @@
 
 ---
 
+
+
 ## 当前限制
 
 请以实际版本为准，避免预期不符：
@@ -284,6 +297,8 @@
 - 个人网盘依赖本机或家里一直开着的 `mywebdisk-server`；服务没启动时客户端连不上。
 
 ---
+
+
 
 ## 从源码构建
 
@@ -322,6 +337,8 @@ cargo tauri dev
 
 ---
 
+
+
 ## 常见问题
 
 **File2File 和普通网盘有什么区别？**  
@@ -353,17 +370,23 @@ cargo tauri dev
 
 ---
 
+
+
 ## 技术栈
 
-| 层 | 技术 |
-| --- | --- |
-| 桌面壳 | [Tauri 2](https://v2.tauri.app/)（Rust） |
-| 界面 | HTML / CSS / JavaScript |
-| P2P 通道 | [webrpc](https://webrpc.cn) SDK |
-| 语音 | cpal 采集播放 + AEC3 回声消除 |
-| 远程画面 | 屏幕采集 + H.264 传输，前端 Canvas 绘制 |
+
+| 层      | 技术                                     |
+| ------ | -------------------------------------- |
+| 桌面壳    | [Tauri 2](https://v2.tauri.app/)（Rust） |
+| 界面     | HTML / CSS / JavaScript                |
+| P2P 通道 | [webrpc](https://webrpc.cn) SDK        |
+| 语音     | cpal 采集播放 + AEC3 回声消除                  |
+| 远程画面   | 屏幕采集 + H.264 传输，前端 Canvas 绘制           |
+
 
 ---
+
+
 
 ## 后续规划
 
@@ -375,6 +398,8 @@ cargo tauri dev
 
 ---
 
+
+
 ## 相关链接
 
 - File2File 预编译下载：[dist-tauri](https://github.com/xiaoming-software/File2File-Desktop/tree/main/dist-tauri)
@@ -385,8 +410,11 @@ cargo tauri dev
 
 ---
 
+
+
 ## 关键词
 
 File2File、P2P 文件传输、点对点传文件、大文件传输、webrpc、一键注册、零门槛、免费 Token、个人网盘、个人 NAS、远程桌面、远程控制电脑、跨平台桌面客户端、免费远控、无需公网 IP
 
 > File2File 只在对端之间传数据，不托管你的文件。请自行保管 Token 与口令。远程控制会看到对方屏幕，请只连接你信任的人。
+
