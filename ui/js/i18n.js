@@ -124,6 +124,8 @@
     "取消": "Cancel",
     "添加": "Add",
     "输入家里 NAS 或网盘设备的 webrpc Token，添加到「网盘连接」。连接后可查阅和更新 NAS 上的文件。认证口令可留空，连接时仍可修改。": "Enter the webrpc token for your NAS or cloud device. After connecting, you can browse and update files. Passphrase is optional and can be changed when you connect.",
+    "若尚未部署网盘服务端，请先{link}，在家里的 NAS 或电脑上安装并保持运行。然后输入服务端 webrpc Token；认证口令可留空，连接时仍可修改。": "If you haven’t deployed a cloud server yet, {link}, install it on your home NAS or computer, and keep it running. Then enter the server webrpc token. Passphrase is optional and can be changed when you connect.",
+    "下载 MyWebDisk": "Download MyWebDisk",
     "网盘 Token": "Cloud token",
     "请输入网盘 Token": "Enter cloud token",
     "设置备注": "Rename",
@@ -215,6 +217,18 @@
     "正在呼叫": "Calling",
     "邀请你语音通话": "Incoming voice call",
     "语音通话中": "Voice call in progress",
+    "视频通话": "Video call",
+    "视频通话失败，请稍后重试。": "Video call failed. Try again shortly.",
+    "无法视频通话": "Can't start video call",
+    "请先连接当前会话，再发起视频通话。": "Connect this chat, then start a video call.",
+    "邀请你视频通话": "Incoming video call",
+    "视频通话中": "Video call in progress",
+    "等待对方画面…": "Waiting for video…",
+    "收起视频": "Hide video",
+    "展开视频": "Show video",
+    "点击查看对方画面": "Tap to show peer video large",
+    "点击查看我的画面": "Tap to show your video large",
+    "更多通话选项": "More call options",
     "远程控制失败，请稍后重试。": "Remote control failed. Try again shortly.",
     "无法远程控制": "Can't start remote control",
     "远程控制只支持电脑会话。": "Remote control is only available for computer chats.",
@@ -464,8 +478,16 @@
       el.textContent = t(el.getAttribute("data-i18n"));
     });
     scope.querySelectorAll("[data-i18n-html]").forEach(function (el) {
+      var href = el.getAttribute("data-i18n-link") || "https://webrpc.cn";
+      var labelKey = el.getAttribute("data-i18n-link-label");
+      var label = labelKey ? t(labelKey) : href;
       el.innerHTML = t(el.getAttribute("data-i18n-html"), {
-        link: '<a href="https://webrpc.cn" target="_blank" rel="noopener noreferrer">https://webrpc.cn</a>',
+        link:
+          '<a href="' +
+          href +
+          '" target="_blank" rel="noopener noreferrer">' +
+          label +
+          "</a>",
       });
     });
     scope.querySelectorAll("[data-i18n-placeholder]").forEach(function (el) {

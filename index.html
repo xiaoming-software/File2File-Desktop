@@ -392,7 +392,23 @@
                       data-i18n-placeholder="输入消息，Enter 发送，Shift+Enter 换行" placeholder="输入消息，Enter 发送，Shift+Enter 换行"
                     ></textarea>
                     <input id="file-input" type="file" hidden />
-                    <button class="btn-voice" id="btn-voice" type="button" data-i18n-title="语音通话" title="语音通话" data-i18n="语音">语音</button>
+                    <div class="voice-split" id="voice-split">
+                      <button class="btn-voice" id="btn-voice" type="button" data-i18n-title="语音通话" title="语音通话" data-i18n="语音">语音</button>
+                      <button
+                        class="btn-voice-caret"
+                        id="btn-voice-caret"
+                        type="button"
+                        data-i18n-title="更多通话选项"
+                        title="更多通话选项"
+                        data-i18n-aria="更多通话选项"
+                        aria-label="更多通话选项"
+                        aria-haspopup="menu"
+                        aria-expanded="false"
+                      ></button>
+                      <div class="voice-call-menu" id="voice-call-menu" hidden role="menu">
+                        <button type="button" role="menuitem" id="btn-vcall" data-i18n="视频通话">视频通话</button>
+                      </div>
+                    </div>
                     <button class="btn-voice" id="btn-desktop" type="button" data-i18n-title="远程控制" title="远程控制" data-i18n="远程控制">远程控制</button>
                     <div class="shot-split" id="shot-split">
                       <button class="btn-shot" id="btn-shot" type="button" data-i18n-title="截图 (⌃⌘A)" title="截图 (⌃⌘A)" data-i18n="截图">截图</button>
@@ -449,8 +465,15 @@
             <span class="drive-glyph"></span>
           </div>
           <h3 data-i18n="新建连接">新建连接</h3>
-          <p class="modal-desc" data-i18n="输入家里 NAS 或网盘设备的 webrpc Token，添加到「网盘连接」。连接后可查阅和更新 NAS 上的文件。认证口令可留空，连接时仍可修改。">
-            输入家里 NAS 或网盘设备的 webrpc Token，添加到「网盘连接」。连接后可查阅和更新 NAS 上的文件。认证口令可留空，连接时仍可修改。
+          <p
+            class="modal-desc"
+            data-i18n-html="若尚未部署网盘服务端，请先{link}，在家里的 NAS 或电脑上安装并保持运行。然后输入服务端 webrpc Token；认证口令可留空，连接时仍可修改。"
+            data-i18n-link="https://github.com/xiaoming-software/mywebdisk"
+            data-i18n-link-label="下载 MyWebDisk"
+          >
+            若尚未部署网盘服务端，请先
+            <a href="https://github.com/xiaoming-software/mywebdisk" target="_blank" rel="noopener noreferrer">下载 MyWebDisk</a>
+            ，在家里的 NAS 或电脑上安装并保持运行。然后输入服务端 webrpc Token；认证口令可留空，连接时仍可修改。
           </p>
           <label class="field">
             <span data-i18n="网盘 Token">网盘 Token</span>
@@ -712,6 +735,34 @@
         <canvas id="desktop-frame" hidden></canvas>
         <div class="desktop-cursor" id="desktop-cursor" hidden></div>
         <p class="desktop-placeholder" id="desktop-placeholder" data-i18n="等待对方桌面…">等待对方桌面…</p>
+      </div>
+    </div>
+  </div>
+  <div class="vcall-root" id="vcall-root" hidden>
+    <div class="vcall-backdrop"></div>
+    <div class="vcall-card">
+      <div class="vcall-toolbar">
+        <div class="vcall-toolbar-info" id="vcall-toolbar-info">
+          <h3 id="vcall-title" data-i18n="视频通话">视频通话</h3>
+          <p id="vcall-sub">—</p>
+        </div>
+        <p class="vcall-timer" id="vcall-timer" hidden>00:00</p>
+        <div class="vcall-toolbar-btns">
+          <button type="button" class="vcall-win-btn" id="vcall-minimize" hidden data-i18n-title="收起视频" title="收起视频" data-i18n-aria="收起视频" aria-label="收起视频">—</button>
+          <button type="button" class="vcall-win-btn" id="vcall-restore" hidden data-i18n-title="展开视频" title="展开视频" data-i18n-aria="展开视频" aria-label="展开视频">□</button>
+        </div>
+      </div>
+      <div class="vcall-stage" id="vcall-stage" hidden>
+        <canvas id="vcall-remote" class="vcall-remote" hidden role="button" tabindex="0" data-i18n-aria="点击查看对方画面" aria-label="点击查看对方画面"></canvas>
+        <canvas id="vcall-local" class="vcall-local" hidden role="button" tabindex="0" data-i18n-aria="点击查看我的画面" aria-label="点击查看我的画面"></canvas>
+        <p class="vcall-placeholder" id="vcall-placeholder" data-i18n="等待对方画面…">等待对方画面…</p>
+      </div>
+      <div class="vcall-actions">
+        <button type="button" class="voice-btn is-mute" id="vcall-mute" hidden data-i18n="静音">静音</button>
+        <button type="button" class="voice-btn is-cancel" id="vcall-cancel" data-i18n="取消">取消</button>
+        <button type="button" class="voice-btn is-reject" id="vcall-reject" hidden data-i18n="拒绝">拒绝</button>
+        <button type="button" class="voice-btn is-accept" id="vcall-accept" hidden data-i18n="接听">接听</button>
+        <button type="button" class="voice-btn is-hangup" id="vcall-hangup" hidden data-i18n="挂断">挂断</button>
       </div>
     </div>
   </div>

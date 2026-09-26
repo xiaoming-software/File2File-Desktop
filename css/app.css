@@ -2448,6 +2448,18 @@ body.is-nas-selecting * {
   color: var(--text-secondary);
 }
 
+.connect-desc a,
+.modal-desc a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 650;
+}
+
+.connect-desc a:hover,
+.modal-desc a:hover {
+  text-decoration: underline;
+}
+
 .connect-peer {
   margin: 14px 0 12px;
   font-size: 12.5px;
@@ -3384,6 +3396,276 @@ body.has-office-dock .nas-files {
 
 .btn-voice:hover:not(:disabled) {
   background: #e4e9ef;
+}
+
+.voice-split {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.voice-split .btn-voice {
+  border-radius: 6px 0 0 6px;
+  border-right: 0;
+}
+
+.btn-voice-caret {
+  width: 22px;
+  height: 36px;
+  padding: 0;
+  border-radius: 0 6px 6px 0;
+  cursor: pointer;
+  border: 1px solid var(--input-border);
+  background: #eef1f5;
+}
+
+.btn-voice-caret:hover:not(:disabled) {
+  background: #e4e9ef;
+}
+
+.btn-voice-caret::before {
+  content: "";
+  display: block;
+  margin: 0 auto;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid #3f4a5a;
+}
+
+.voice-call-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 20;
+  min-width: 120px;
+  padding: 4px;
+  background: #fff;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(16, 24, 40, 0.12);
+}
+
+.voice-call-menu[hidden] {
+  display: none;
+}
+
+.voice-call-menu button {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.voice-call-menu button:hover {
+  background: #f2f4f7;
+}
+
+.vcall-root {
+  position: fixed;
+  inset: 0;
+  z-index: 75;
+  display: grid;
+  place-items: center;
+}
+
+.vcall-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(16, 24, 40, 0.55);
+}
+
+.vcall-root.is-active {
+  inset: auto;
+  right: 16px;
+  bottom: 16px;
+  left: auto;
+  top: auto;
+  width: min(320px, calc(100vw - 32px));
+  display: block;
+  pointer-events: none;
+}
+
+.vcall-root.is-active .vcall-backdrop {
+  display: none;
+}
+
+.vcall-root.is-active .vcall-card {
+  pointer-events: auto;
+  width: 100%;
+  max-height: min(72vh, calc(100vh - 32px));
+  box-shadow: 0 18px 48px rgba(16, 24, 40, 0.35);
+}
+
+.vcall-root.is-minimized {
+  width: min(280px, calc(100vw - 32px));
+}
+
+.vcall-root.is-minimized .vcall-stage,
+.vcall-root.is-minimized .vcall-toolbar-info p {
+  display: none;
+}
+
+.vcall-root.is-minimized .vcall-card {
+  padding: 10px 12px;
+  gap: 8px;
+}
+
+.vcall-root.is-minimized .vcall-toolbar {
+  margin: 0;
+}
+
+.vcall-root.is-minimized .vcall-toolbar-info {
+  cursor: pointer;
+}
+
+.vcall-root.is-minimized .vcall-toolbar-info h3 {
+  font-size: 14px;
+}
+
+.vcall-root.is-minimized .vcall-timer {
+  margin-left: auto;
+}
+
+.vcall-root.is-minimized .vcall-actions {
+  margin-top: 0;
+}
+
+.vcall-card {
+  position: relative;
+  z-index: 1;
+  width: min(720px, calc(100% - 32px));
+  max-height: calc(100% - 48px);
+  padding: 20px;
+  border-radius: 16px;
+  background: #101828;
+  color: #f9fafb;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.vcall-toolbar {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.vcall-toolbar-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.vcall-toolbar-info h3,
+.vcall-card h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.vcall-toolbar-info p,
+.vcall-card p {
+  margin: 0;
+  color: #d0d5dd;
+  font-size: 14px;
+}
+
+.vcall-timer {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  color: #98a2b3;
+  flex-shrink: 0;
+  line-height: 1.6;
+}
+
+.vcall-toolbar-btns {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.vcall-win-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #f9fafb;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.vcall-win-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.vcall-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #1d2939;
+}
+
+.vcall-remote,
+.vcall-local {
+  object-fit: cover;
+  display: block;
+  cursor: pointer;
+}
+
+.vcall-stage:not(.is-swapped) .vcall-remote,
+.vcall-stage.is-swapped .vcall-local {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  z-index: 1;
+}
+
+.vcall-stage:not(.is-swapped) .vcall-local,
+.vcall-stage.is-swapped .vcall-remote {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  width: 28%;
+  max-width: 160px;
+  aspect-ratio: 4 / 3;
+  border-radius: 8px;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  z-index: 2;
+}
+
+.vcall-placeholder {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: #98a2b3;
+  font-size: 14px;
+  pointer-events: none;
+}
+
+.vcall-actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .voice-root {

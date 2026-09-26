@@ -11,6 +11,9 @@ mod screenshot;
 mod storage;
 mod desktop;
 mod voice;
+mod videocall;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+mod camera;
 mod portal;
 mod webrpc;
 
@@ -100,6 +103,12 @@ fn main() {
             voice::voice_hangup,
             voice::voice_set_mute,
             voice::voice_state,
+            videocall::vcall_invite,
+            videocall::vcall_accept,
+            videocall::vcall_reject,
+            videocall::vcall_hangup,
+            videocall::vcall_set_mute,
+            videocall::vcall_state,
             desktop::desktop_invite,
             desktop::desktop_accept,
             desktop::desktop_reject,

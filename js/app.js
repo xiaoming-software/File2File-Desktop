@@ -332,6 +332,12 @@
     voiceMuted: false,
     voiceTimer: null,
     voiceStartedAt: 0,
+    vcallPhase: "idle",
+    vcallSwapped: false,
+    vcallMinimized: false,
+    vcallMuted: false,
+    vcallTimer: null,
+    vcallStartedAt: 0,
     portalLink: null,
     portalExpiryMs: 0,
     portalExpiryTimer: null,
@@ -343,11 +349,25 @@
   const PORTAL_EXPIRY_WARN_DAYS = 7;
   const PORTAL_EXPIRY_REFRESH_MS = 6 * 60 * 60 * 1000;
   const PORTAL_ORDERS_URL = "https://www.webrpc.cn/#orders";
+  const MYWEBDISK_URL = "https://github.com/xiaoming-software/mywebdisk";
+  const DRIVE_SERVER_HINT_KEY =
+    "若尚未部署网盘服务端，请先{link}，在家里的 NAS 或电脑上安装并保持运行。然后输入服务端 webrpc Token；认证口令可留空，连接时仍可修改。";
   const REGISTER_TIMEOUT_MS = 30000;
   let sidebarSplitRatio = 0.5;
   let sidebarSplitDragging = false;
   const NAS_VIEW_KEY = "file2file.nasView";
   let nasViewMode = "list";
+
+  function driveServerHintHtml() {
+    return t(DRIVE_SERVER_HINT_KEY, {
+      link:
+        '<a href="' +
+        MYWEBDISK_URL +
+        '" target="_blank" rel="noopener noreferrer">' +
+        t("下载 MyWebDisk") +
+        "</a>",
+    });
+  }
 
   function isTauri() {
     return !!(window.__TAURI__ || window.__TAURI_INTERNALS__);
@@ -432,8 +452,23 @@
         window.__TAURI__.event.listen("screenshot-done", function (event) {
           onScreenshotDone(event.payload);
         });
+        window.__TAURI__.event.listen("webrpc-voice-error", function (event) {
+          showVoiceError(event.payload || "");
+        });
         window.__TAURI__.event.listen("webrpc-voice-state", function (event) {
           onVoiceState(event.payload || {});
+        });
+        window.__TAURI__.event.listen("webrpc-vcall-error", function (event) {
+          showVcallError(event.payload || "");
+        });
+        window.__TAURI__.event.listen("webrpc-vcall-state", function (event) {
+          onVcallState(event.payload || {});
+        });
+        window.__TAURI__.event.listen("webrpc-vcall-remote-frame", function (event) {
+          onVcallRemoteFrame(event.payload || {});
+        });
+        window.__TAURI__.event.listen("webrpc-vcall-local-frame", function (event) {
+          onVcallLocalFrame(event.payload || {});
         });
         window.__TAURI__.event.listen("webrpc-desktop-state", function (event) {
           onDesktopState(event.payload || {});
@@ -877,15 +912,26 @@
       openInfoPrompt(t("无法语音通话"), t("请先连接当前会话，再发起语音通话。"));
       return;
     }
-    tauriInvoke("voice_invite", { sessionId: session.rpcSessionId }).catch(showVoiceError);
+    tauriInvoke("voice_invite", {
+      sessionId: session.rpcSessionId,
+      peerPass: session.peerPass || "",
+    }).catch(showVoiceError);
   }
 
-  function voicePeerLabel(sessionId, fallback) {
-    const session = state.sessions.find(function (item) {
-      return item.rpcSessionId === sessionId;
-    });
-    if (session) return session.remark || session.peerToken || fallback || t("对方");
-    return fallback || t("对方");
+  function voicePeerLabel(sessionId, peerToken) {
+    const token = String(peerToken || "").trim();
+    let session = findByRpcSessionId(sessionId);
+    if (!session && token) {
+      session = state.sessions.find(function (item) {
+        return item.peerToken === token;
+      });
+    }
+    if (session) {
+      const remark = String(session.remark || "").trim();
+      if (remark) return remark;
+      if (session.peerToken) return session.peerToken;
+    }
+    return token || t("对方");
   }
 
   function formatVoiceTimer(startedAt) {
@@ -976,6 +1022,234 @@
       hangup.hidden = false;
       mute.hidden = false;
       startVoiceTimer(payload.startedAt);
+    }
+  }
+
+  function showVcallError(err) {
+    var msg = "";
+    if (typeof err === "string") msg = err;
+    else if (err && err.message) msg = String(err.message);
+    else msg = String(err || "");
+    if (!msg || msg === "[object Object]" || msg === "undefined") {
+      msg = t("视频通话失败，请稍后重试。");
+    }
+    openInfoPrompt(t("无法视频通话"), msg);
+  }
+
+  function hideVoiceCallMenu() {
+    const menu = document.getElementById("voice-call-menu");
+    const caret = document.getElementById("btn-voice-caret");
+    if (menu) menu.hidden = true;
+    if (caret) caret.setAttribute("aria-expanded", "false");
+  }
+
+  function toggleVoiceCallMenu(event) {
+    if (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    const menu = document.getElementById("voice-call-menu");
+    const caret = document.getElementById("btn-voice-caret");
+    if (!menu) return;
+    const open = menu.hidden;
+    hideVoiceCallMenu();
+    if (open) {
+      menu.hidden = false;
+      if (caret) caret.setAttribute("aria-expanded", "true");
+    }
+  }
+
+  function startVcall() {
+    hideVoiceCallMenu();
+    const session = findSession(state.selectedId);
+    if (!session) {
+      openInfoPrompt(t("无法视频通话"), t("请先选择并连接一个会话。"));
+      return;
+    }
+    if (!session.connected || !session.rpcSessionId) {
+      openInfoPrompt(t("无法视频通话"), t("请先连接当前会话，再发起视频通话。"));
+      return;
+    }
+    tauriInvoke("vcall_invite", {
+      sessionId: session.rpcSessionId,
+      peerPass: session.peerPass || "",
+    }).catch(showVcallError);
+  }
+
+  function stopVcallTimer() {
+    if (state.vcallTimer) {
+      clearInterval(state.vcallTimer);
+      state.vcallTimer = null;
+    }
+  }
+
+  function startVcallTimer(startedAt) {
+    stopVcallTimer();
+    state.vcallStartedAt = Number(startedAt) || Date.now();
+    const el = document.getElementById("vcall-timer");
+    function tick() {
+      if (el) el.textContent = formatVoiceTimer(state.vcallStartedAt);
+    }
+    tick();
+    state.vcallTimer = setInterval(tick, 1000);
+  }
+
+  function hideVcallUi() {
+    stopVcallTimer();
+    state.vcallPhase = "idle";
+    state.vcallSwapped = false;
+    state.vcallMinimized = false;
+    const root = document.getElementById("vcall-root");
+    if (root) {
+      root.hidden = true;
+      root.classList.remove("is-active", "is-minimized");
+    }
+    const stage = document.getElementById("vcall-stage");
+    if (stage) stage.classList.remove("is-swapped");
+    if (stage) stage.hidden = true;
+    ["vcall-remote", "vcall-local"].forEach(function (id) {
+      const canvas = document.getElementById(id);
+      if (!canvas) return;
+      canvas.hidden = true;
+      const ctx = canvas.getContext && canvas.getContext("2d");
+      if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+    });
+    const placeholder = document.getElementById("vcall-placeholder");
+    if (placeholder) placeholder.hidden = false;
+    applyVcallChrome();
+  }
+
+  function updateVcallPlaceholder() {
+    const placeholder = document.getElementById("vcall-placeholder");
+    const remote = document.getElementById("vcall-remote");
+    if (!placeholder || !remote) return;
+    const remoteIsMain = !state.vcallSwapped;
+    placeholder.hidden = !(remoteIsMain && remote.hidden);
+  }
+
+  function applyVcallChrome() {
+    const root = document.getElementById("vcall-root");
+    const stage = document.getElementById("vcall-stage");
+    const minimize = document.getElementById("vcall-minimize");
+    const restore = document.getElementById("vcall-restore");
+    const active = state.vcallPhase === "active";
+    if (root) {
+      root.classList.toggle("is-active", active);
+      root.classList.toggle("is-minimized", active && state.vcallMinimized);
+    }
+    if (stage) stage.classList.toggle("is-swapped", !!state.vcallSwapped);
+    if (minimize) minimize.hidden = !active || state.vcallMinimized;
+    if (restore) restore.hidden = !active || !state.vcallMinimized;
+    updateVcallPlaceholder();
+  }
+
+  function setVcallMainView(view) {
+    if (state.vcallPhase !== "active" || state.vcallMinimized) return;
+    state.vcallSwapped = view === "local";
+    applyVcallChrome();
+  }
+
+  function setVcallMinimized(minimized) {
+    if (state.vcallPhase !== "active") return;
+    state.vcallMinimized = !!minimized;
+    applyVcallChrome();
+  }
+
+  function drawVcallFrame(canvasId, payload) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || !payload || !payload.jpeg) return;
+    const width = Number(payload.width) || 0;
+    const height = Number(payload.height) || 0;
+    if (!width || !height) return;
+    const img = new Image();
+    img.onload = function () {
+      if (canvas.width !== width) canvas.width = width;
+      if (canvas.height !== height) canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (ctx) ctx.drawImage(img, 0, 0, width, height);
+      canvas.hidden = false;
+      updateVcallPlaceholder();
+    };
+    img.src = "data:image/jpeg;base64," + payload.jpeg;
+  }
+
+  function onVcallRemoteFrame(payload) {
+    drawVcallFrame("vcall-remote", payload);
+  }
+
+  function onVcallLocalFrame(payload) {
+    drawVcallFrame("vcall-local", payload);
+  }
+
+  function onVcallState(payload) {
+    const phase = String((payload && payload.phase) || "idle");
+    state.vcallPhase = phase;
+    const root = document.getElementById("vcall-root");
+    const title = document.getElementById("vcall-title");
+    const sub = document.getElementById("vcall-sub");
+    const timer = document.getElementById("vcall-timer");
+    const stage = document.getElementById("vcall-stage");
+    const accept = document.getElementById("vcall-accept");
+    const reject = document.getElementById("vcall-reject");
+    const cancel = document.getElementById("vcall-cancel");
+    const hangup = document.getElementById("vcall-hangup");
+    const mute = document.getElementById("vcall-mute");
+    const local = document.getElementById("vcall-local");
+    if (!root) return;
+    if (phase === "idle") {
+      hideVcallUi();
+      state.vcallMuted = false;
+      return;
+    }
+    if (phase !== "active") {
+      state.vcallSwapped = false;
+      state.vcallMinimized = false;
+    }
+    const sessionId = Number(payload.sessionId) || 0;
+    const name = voicePeerLabel(sessionId, payload.peerToken);
+    root.hidden = false;
+    state.vcallMuted = !!payload.muted;
+    if (mute) {
+      mute.classList.toggle("is-on", state.vcallMuted);
+      mute.textContent = state.vcallMuted ? t("取消静音") : t("静音");
+    }
+    if (local) local.hidden = !payload.hasCamera;
+    if (phase === "outgoing") {
+      title.textContent = t("正在呼叫");
+      sub.textContent = name;
+      if (timer) timer.hidden = true;
+      if (stage) stage.hidden = true;
+      accept.hidden = true;
+      reject.hidden = true;
+      cancel.hidden = false;
+      hangup.hidden = true;
+      mute.hidden = true;
+      stopVcallTimer();
+      applyVcallChrome();
+    } else if (phase === "incoming") {
+      title.textContent = t("邀请你视频通话");
+      sub.textContent = name;
+      if (timer) timer.hidden = true;
+      if (stage) stage.hidden = true;
+      accept.hidden = false;
+      reject.hidden = false;
+      cancel.hidden = true;
+      hangup.hidden = true;
+      mute.hidden = true;
+      stopVcallTimer();
+      applyVcallChrome();
+    } else {
+      title.textContent = t("视频通话中");
+      sub.textContent = name;
+      if (timer) timer.hidden = false;
+      if (stage) stage.hidden = false;
+      accept.hidden = true;
+      reject.hidden = true;
+      cancel.hidden = true;
+      hangup.hidden = false;
+      mute.hidden = false;
+      startVcallTimer(payload.startedAt);
+      applyVcallChrome();
     }
   }
 
@@ -6883,6 +7157,8 @@
     confirmOkBtn.addEventListener("click", onConfirmOk);
     connectBtn.addEventListener("click", connectSelected);
     document.getElementById("btn-voice").addEventListener("click", startVoiceCall);
+    document.getElementById("btn-voice-caret").addEventListener("click", toggleVoiceCallMenu);
+    document.getElementById("btn-vcall").addEventListener("click", startVcall);
     document.getElementById("btn-desktop").addEventListener("click", function () {
       const btn = document.getElementById("btn-desktop");
       if (state.desktopPhase && state.desktopPhase !== "idle") {
@@ -6928,6 +7204,43 @@
     document.getElementById("voice-mute").addEventListener("click", function () {
       const next = !state.voiceMuted;
       tauriInvoke("voice_set_mute", { muted: next }).catch(showVoiceError);
+    });
+    document.getElementById("vcall-accept").addEventListener("click", function () {
+      tauriInvoke("vcall_accept").catch(showVcallError);
+    });
+    document.getElementById("vcall-reject").addEventListener("click", function () {
+      tauriInvoke("vcall_reject").catch(showVcallError);
+    });
+    document.getElementById("vcall-cancel").addEventListener("click", function () {
+      tauriInvoke("vcall_hangup").catch(showVcallError);
+    });
+    document.getElementById("vcall-hangup").addEventListener("click", function () {
+      tauriInvoke("vcall_hangup").catch(showVcallError);
+    });
+    document.getElementById("vcall-mute").addEventListener("click", function () {
+      const next = !state.vcallMuted;
+      tauriInvoke("vcall_set_mute", { muted: next }).catch(showVcallError);
+    });
+    document.getElementById("vcall-minimize").addEventListener("click", function (event) {
+      event.stopPropagation();
+      setVcallMinimized(true);
+    });
+    document.getElementById("vcall-restore").addEventListener("click", function (event) {
+      event.stopPropagation();
+      setVcallMinimized(false);
+    });
+    document.getElementById("vcall-toolbar-info").addEventListener("click", function () {
+      if (state.vcallPhase === "active" && state.vcallMinimized) {
+        setVcallMinimized(false);
+      }
+    });
+    document.getElementById("vcall-remote").addEventListener("click", function (event) {
+      event.stopPropagation();
+      setVcallMainView("remote");
+    });
+    document.getElementById("vcall-local").addEventListener("click", function (event) {
+      event.stopPropagation();
+      setVcallMainView("local");
     });
     document.getElementById("btn-file").addEventListener("click", pickPendingFile);
     document.getElementById("btn-shot").addEventListener("click", function () {
@@ -7273,9 +7586,13 @@
         connectTitle.textContent = isDrive(session) ? t("请先连接网盘") : t("请先建立 P2P 连接");
       }
       if (connectDesc) {
-        connectDesc.textContent = isDrive(session)
-          ? t("当前尚未与 NAS / 网盘设备连通。连接成功后即可查阅和更新家里的文件。")
-          : t("当前会话尚未与对端连通，连接成功后即可收发消息和文件。");
+        if (isDrive(session)) {
+          connectDesc.innerHTML = driveServerHintHtml();
+        } else {
+          connectDesc.textContent = t(
+            "当前会话尚未与对端连通，连接成功后即可收发消息和文件。"
+          );
+        }
       }
       const name = session.remark || session.peerToken;
       connectPeer.textContent = (isDrive(session) ? t("网盘 Token：") : t("对方 Token：")) + session.peerToken;
@@ -7320,6 +7637,8 @@
     document.getElementById("btn-shot").disabled = false;
     document.getElementById("btn-shot-caret").disabled = false;
     document.getElementById("btn-voice").disabled = false;
+    const voiceCaret = document.getElementById("btn-voice-caret");
+    if (voiceCaret) voiceCaret.disabled = false;
     const btnDesktop = document.getElementById("btn-desktop");
     if (btnDesktop) btnDesktop.disabled = false;
     document.getElementById("btn-send").disabled = false;
@@ -8371,10 +8690,10 @@
     if (!sid) return null;
     return (
       state.sessions.find(function (item) {
-        return item.rpcSessionId === sid;
+        return Number(item.rpcSessionId) === sid;
       }) ||
       state.drives.find(function (item) {
-        return item.rpcSessionId === sid;
+        return Number(item.rpcSessionId) === sid;
       }) ||
       null
     );

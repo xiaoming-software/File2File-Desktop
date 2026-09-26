@@ -196,6 +196,7 @@ fn free_current() {
         stop_all_session_monitors();
         recycle_all_file_io();
         crate::voice::shutdown();
+        crate::videocall::shutdown();
         crate::desktop::shutdown();
         clear_login_identity();
         let handle = WEBRPC_HANDLE.swap(0, Ordering::SeqCst);
@@ -266,6 +267,22 @@ fn session_peers() -> &'static Mutex<HashMap<u32, String>> {
     CELL.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+fn session_passes() -> &'static Mutex<HashMap<u32, String>> {
+    static CELL: OnceLock<Mutex<HashMap<u32, String>>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 标记为语音专用会话（非聊天会话）
+fn voice_session_parents() -> &'static Mutex<HashMap<u32, u32>> {
+    static CELL: OnceLock<Mutex<HashMap<u32, u32>>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn videocall_session_parents() -> &'static Mutex<HashMap<u32, u32>> {
+    static CELL: OnceLock<Mutex<HashMap<u32, u32>>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 fn lock_peers() -> std::sync::MutexGuard<'static, HashMap<u32, String>> {
     session_peers().lock().unwrap_or_else(|err| err.into_inner())
 }
@@ -279,6 +296,81 @@ fn remember_peer(session_id: u32, peer_token: &str) {
         return;
     }
     lock_peers().insert(session_id, peer.to_string());
+}
+
+fn remember_peer_pass(session_id: u32, pass: &str) {
+    if session_id == 0 {
+        return;
+    }
+    let pass = pass.trim();
+    if pass.is_empty() {
+        return;
+    }
+    session_passes()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .insert(session_id, pass.to_string());
+}
+
+pub(crate) fn peer_pass_of(session_id: u32) -> String {
+    session_passes()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .get(&session_id)
+        .cloned()
+        .unwrap_or_default()
+}
+
+pub(crate) fn remember_session_pass(session_id: u32, pass: &str) {
+    remember_peer_pass(session_id, pass);
+}
+
+fn mark_voice_session(voice_session_id: u32, chat_session_id: u32) {
+    if voice_session_id == 0 || chat_session_id == 0 {
+        return;
+    }
+    voice_session_parents()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .insert(voice_session_id, chat_session_id);
+}
+
+fn unmark_voice_session(voice_session_id: u32) {
+    voice_session_parents()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .remove(&voice_session_id);
+}
+
+pub(crate) fn is_voice_session(session_id: u32) -> bool {
+    voice_session_parents()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .contains_key(&session_id)
+}
+
+pub(crate) fn mark_videocall_session(media_session_id: u32, chat_session_id: u32) {
+    if media_session_id == 0 || chat_session_id == 0 {
+        return;
+    }
+    videocall_session_parents()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .insert(media_session_id, chat_session_id);
+}
+
+fn unmark_videocall_session(media_session_id: u32) {
+    videocall_session_parents()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .remove(&media_session_id);
+}
+
+pub(crate) fn is_videocall_session(session_id: u32) -> bool {
+    videocall_session_parents()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .contains_key(&session_id)
 }
 
 pub(crate) fn peer_token_of(session_id: u32) -> String {
@@ -296,6 +388,12 @@ pub(crate) fn peer_token_of(session_id: u32) -> String {
 
 fn recycle_session_file_io(session_id: u32) {
     lock_peers().remove(&session_id);
+    session_passes()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .remove(&session_id);
+    unmark_voice_session(session_id);
+    unmark_videocall_session(session_id);
     {
         let mut jobs = send_jobs().lock().unwrap_or_else(|err| err.into_inner());
         jobs.retain(|(sid, _), job| {
@@ -315,6 +413,18 @@ fn recycle_session_file_io(session_id: u32) {
 
 fn recycle_all_file_io() {
     lock_peers().clear();
+    session_passes()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .clear();
+    voice_session_parents()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .clear();
+    videocall_session_parents()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .clear();
     {
         let mut jobs = send_jobs().lock().unwrap_or_else(|err| err.into_inner());
         for job in jobs.values() {
@@ -438,12 +548,23 @@ fn session_watch_loop(session_id: u32, epoch: u64) {
                         g.joins.remove(&session_id);
                     }
                 }
+                if is_voice_session(session_id) {
+                    crate::voice::on_voice_transport_dead(session_id);
+                    recycle_session_file_io(session_id);
+                    return;
+                }
+                if is_videocall_session(session_id) {
+                    crate::videocall::on_media_session_dead(session_id);
+                    recycle_session_file_io(session_id);
+                    return;
+                }
                 if let Some(app) = APP_HANDLE.get() {
                     let _ = app.emit("webrpc-session-dead", session_id);
                 }
                 crate::nas::stop_watch(session_id);
                 crate::tasks::on_session_dead(session_id);
-                crate::voice::on_session_dead(session_id);
+                crate::voice::on_chat_session_dead(session_id);
+                crate::videocall::on_chat_session_dead(session_id);
                 crate::desktop::on_session_dead(session_id);
                 recycle_session_file_io(session_id);
                 return;
@@ -576,12 +697,21 @@ pub async fn webrpc_close_session(
         return Ok(());
     }
     tauri::async_runtime::spawn_blocking(move || {
+        if is_voice_session(session_id) {
+            close_voice_webrpc_session(session_id);
+            return Ok(());
+        }
+        if is_videocall_session(session_id) {
+            close_videocall_webrpc_session(session_id);
+            return Ok(());
+        }
         stop_session_monitor(session_id);
         crate::nas::stop_watch(session_id);
         crate::tasks::on_session_dead(session_id);
-        recycle_session_file_io(session_id);
-        crate::voice::on_session_dead(session_id);
+        crate::voice::on_chat_session_dead(session_id);
+        crate::videocall::on_chat_session_dead(session_id);
         crate::desktop::on_session_dead(session_id);
+        recycle_session_file_io(session_id);
         let handle = current_handle();
         if handle == 0 {
             return Ok(());
@@ -609,6 +739,98 @@ fn close_session_blocking(handle: usize, session_id: u32) -> Result<(), String> 
     }
 }
 
+/// 发起方 accept 后：向对端 OpenSession 建立语音通道。
+pub(crate) fn open_inviter_voice_session(
+    chat_session_id: u32,
+    pass_override: Option<&str>,
+) -> Result<u32, String> {
+    if chat_session_id == 0 {
+        return Err("语音会话创建失败：聊天会话无效。".into());
+    }
+    let handle = current_handle();
+    if handle == 0 {
+        return Err("语音会话创建失败：尚未登录。".into());
+    }
+    let peer = peer_token_of(chat_session_id);
+    if peer.is_empty() {
+        return Err("语音会话创建失败：无法解析对端 Token。".into());
+    }
+    let pass = pass_override
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| peer_pass_of(chat_session_id));
+    if pass.is_empty() {
+        return Err("语音会话创建失败：缺少对方口令，请重新连接聊天会话。".into());
+    }
+    let voice_id = open_session_blocking(handle, peer, pass)?;
+    mark_voice_session(voice_id, chat_session_id);
+    eprintln!("webrpc: inviter opened voice session {voice_id} for chat {chat_session_id}");
+    Ok(voice_id)
+}
+
+/// 仅关闭 webrpc 语音会话，不回调 voice 模块（避免死锁）。
+pub(crate) fn close_voice_webrpc_session(voice_session_id: u32) {
+    if voice_session_id == 0 {
+        return;
+    }
+    eprintln!("webrpc: CloseSession voice id={voice_session_id}");
+    stop_session_monitor(voice_session_id);
+    unmark_voice_session(voice_session_id);
+    let handle = current_handle();
+    if handle != 0 {
+        let _ = close_session_blocking(handle, voice_session_id);
+    } else {
+        recycle_session_file_io(voice_session_id);
+    }
+}
+
+/// 发起方 accept 后：向对端 OpenSession 建立视频通话通道。
+pub(crate) fn open_inviter_videocall_session(
+    chat_session_id: u32,
+    pass_override: Option<&str>,
+) -> Result<u32, String> {
+    if chat_session_id == 0 {
+        return Err("视频会话创建失败：聊天会话无效。".into());
+    }
+    let handle = current_handle();
+    if handle == 0 {
+        return Err("视频会话创建失败：尚未登录。".into());
+    }
+    let peer = peer_token_of(chat_session_id);
+    if peer.is_empty() {
+        return Err("视频会话创建失败：无法解析对端 Token。".into());
+    }
+    let pass = pass_override
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| peer_pass_of(chat_session_id));
+    if pass.is_empty() {
+        return Err("视频会话创建失败：缺少对方口令，请重新连接聊天会话。".into());
+    }
+    let media_id = open_session_blocking(handle, peer, pass)?;
+    mark_videocall_session(media_id, chat_session_id);
+    eprintln!("webrpc: inviter opened videocall session {media_id} for chat {chat_session_id}");
+    Ok(media_id)
+}
+
+/// 仅关闭 webrpc 视频会话，不回调 videocall 模块（避免死锁）。
+pub(crate) fn close_videocall_webrpc_session(media_session_id: u32) {
+    if media_session_id == 0 {
+        return;
+    }
+    eprintln!("webrpc: CloseSession videocall id={media_session_id}");
+    stop_session_monitor(media_session_id);
+    unmark_videocall_session(media_session_id);
+    let handle = current_handle();
+    if handle != 0 {
+        let _ = close_session_blocking(handle, media_session_id);
+    } else {
+        recycle_session_file_io(media_session_id);
+    }
+}
+
 fn open_session_blocking(handle: usize, peer_token: String, permission: String) -> Result<u32, String> {
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
@@ -624,7 +846,7 @@ fn open_session_blocking(handle: usize, peer_token: String, permission: String) 
             return Err("peer-token-empty".into());
         }
         let peer_c = CString::new(peer.clone()).map_err(|_| "peer-token-invalid".to_string())?;
-        let perm_c = CString::new(permission).map_err(|_| "passphrase-invalid".to_string())?;
+        let perm_c = CString::new(permission.clone()).map_err(|_| "passphrase-invalid".to_string())?;
         let session_id = unsafe {
             WebrpcClient_OpenSession(
                 handle,
@@ -639,6 +861,7 @@ fn open_session_blocking(handle: usize, peer_token: String, permission: String) 
         }
         eprintln!("webrpc: OpenSession ok, sessionId={session_id}");
         remember_peer(session_id, &peer);
+        remember_peer_pass(session_id, &permission);
         if let Err(err) = send_hello_blocking(handle, session_id) {
             eprintln!("webrpc: handshake SendData failed, CloseSession");
             let _ = close_session_blocking(handle, session_id);
@@ -1405,8 +1628,19 @@ struct InboundText {
 }
 
 fn handle_data_payload(frame_session_id: u32, payload: Vec<u8>) {
-    if payload.len() >= 3 && payload[0] == 0 && payload[1] == 0 && payload[2] == 0 {
-        crate::desktop::on_video_binary(frame_session_id, &payload);
+    if payload.len() >= 4 && payload[0] == 0 && payload[1] == 0 && payload[2] == 0 {
+        match payload[3] {
+            1 => crate::desktop::on_video_binary(frame_session_id, &payload),
+            2 => {
+                if is_videocall_session(frame_session_id) {
+                    crate::videocall::on_audio_binary(frame_session_id, &payload);
+                } else {
+                    crate::voice::on_audio_binary(frame_session_id, &payload);
+                }
+            }
+            3 => crate::videocall::on_video_binary(frame_session_id, &payload),
+            _ => {}
+        }
         return;
     }
     let value: serde_json::Value = match serde_json::from_slice(&payload) {
@@ -1443,11 +1677,15 @@ fn handle_data_payload(frame_session_id: u32, payload: Vec<u8>) {
                 2 => handle_text_payload(frame_session_id, data),
                 3 => handle_file_query(frame_session_id, data),
                 4 => handle_file_reply(frame_session_id, data),
-                5 => crate::voice::on_audio_frame(frame_session_id, data),
-                6 => crate::voice::on_signal(frame_session_id, data),
+                6 => {
+                    crate::voice::on_signal(frame_session_id, data.clone());
+                    crate::videocall::on_signal(frame_session_id, data);
+                }
                 7 => crate::desktop::on_video_frame(frame_session_id, data),
                 8 => crate::desktop::on_signal(frame_session_id, data),
                 9 => crate::desktop::on_input(frame_session_id, data),
+                11 => crate::voice::on_voice_session_signal(frame_session_id, data),
+                12 => crate::videocall::on_session_signal(frame_session_id, data),
                 _ => {}
             }
         }
@@ -1471,6 +1709,9 @@ fn handle_hello_payload(data: serde_json::Value) {
         let _ = app.emit("webrpc-peer-hello", hello.clone());
     }
     remember_peer(hello.session_id, &hello.token);
+    if !hello.permission.trim().is_empty() {
+        remember_peer_pass(hello.session_id, &hello.permission);
+    }
     start_session_monitor(hello.session_id);
 }
 
