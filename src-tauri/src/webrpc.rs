@@ -198,6 +198,7 @@ fn free_current() {
         crate::voice::shutdown();
         crate::videocall::shutdown();
         crate::desktop::shutdown();
+        crate::p2pssh::shutdown();
         clear_login_identity();
         let handle = WEBRPC_HANDLE.swap(0, Ordering::SeqCst);
         if handle != 0 {
@@ -566,6 +567,7 @@ fn session_watch_loop(session_id: u32, epoch: u64) {
                 crate::voice::on_chat_session_dead(session_id);
                 crate::videocall::on_chat_session_dead(session_id);
                 crate::desktop::on_session_dead(session_id);
+                crate::p2pssh::on_session_dead(session_id);
                 recycle_session_file_io(session_id);
                 return;
             }
@@ -704,6 +706,9 @@ pub async fn webrpc_close_session(
         if is_videocall_session(session_id) {
             close_videocall_webrpc_session(session_id);
             return Ok(());
+        }
+        if crate::p2pssh::is_p2pssh_session(session_id) {
+            crate::p2pssh::on_session_dead(session_id);
         }
         stop_session_monitor(session_id);
         crate::nas::stop_watch(session_id);
@@ -1132,6 +1137,28 @@ pub(crate) fn send_bytes_timeout(session_id: u32, payload: &[u8], timeout_ms: i6
         return false;
     }
     send_bytes_raw(handle, session_id, payload, timeout_ms)
+}
+
+pub(crate) async fn open_session_async(peer_token: String, permission: String) -> Result<u32, String> {
+    let handle = current_handle();
+    if handle == 0 {
+        return Err("not-logged-in".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || open_session_blocking(handle, peer_token, permission))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+pub(crate) fn close_session_best_effort(session_id: u32) {
+    if session_id == 0 {
+        return;
+    }
+    stop_session_monitor(session_id);
+    let handle = current_handle();
+    if handle == 0 {
+        return;
+    }
+    let _ = close_session_blocking(handle, session_id);
 }
 
 fn send_bytes_raw(handle: usize, session_id: u32, payload: &[u8], timeout_ms: i64) -> bool {
@@ -1639,6 +1666,7 @@ fn handle_data_payload(frame_session_id: u32, payload: Vec<u8>) {
                 }
             }
             3 => crate::videocall::on_video_binary(frame_session_id, &payload),
+            4 => crate::p2pssh::on_binary(frame_session_id, &payload),
             _ => {}
         }
         return;

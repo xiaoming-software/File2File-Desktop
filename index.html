@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>File2File</title>
   <link rel="stylesheet" href="css/app.css" />
+  <link rel="stylesheet" href="vendor/xterm/xterm.css" />
 </head>
 <body>
   <div class="desktop">
@@ -231,6 +232,11 @@
                   <button class="btn-new-session" id="btn-new-drive" type="button" data-i18n="新建连接">新建连接</button>
                 </div>
                 <div class="session-list" id="drive-list"></div>
+                <div class="session-pane-head session-pane-subhead">
+                  <h2 data-i18n="P2P SSH">P2P SSH</h2>
+                  <button class="btn-new-session" id="btn-new-p2pssh" type="button" data-i18n="新建隧道">新建隧道</button>
+                </div>
+                <div class="session-list" id="p2pssh-list"></div>
               </section>
             </aside>
 
@@ -238,7 +244,7 @@
               <div class="chat-panel" id="panel-unselected">
                 <div class="sessions-empty-icon" aria-hidden="true"></div>
                 <h2 data-i18n="未选择">未选择</h2>
-                <p data-i18n="在左侧选择一个聊天会话或网盘，或点击「新建会话」「新建连接」。">在左侧选择一个聊天会话或网盘，或点击「新建会话」「新建连接」。</p>
+                <p data-i18n="在左侧选择一个聊天会话、网盘或 P2P SSH，或点击对应的新建按钮。">在左侧选择一个聊天会话、网盘或 P2P SSH，或点击对应的新建按钮。</p>
               </div>
 
               <div class="chat-panel connect-panel" id="panel-connect">
@@ -246,6 +252,7 @@
                   <div class="connect-mark" id="connect-mark" aria-hidden="true">
                     <span class="chat-glyph"></span>
                     <span class="drive-glyph"></span>
+                    <span class="ssh-glyph"></span>
                   </div>
                   <h2 id="connect-title" data-i18n="请先建立 P2P 连接">请先建立 P2P 连接</h2>
                   <p class="connect-desc" id="connect-desc" data-i18n="当前会话尚未与对端连通，连接成功后即可收发消息和文件。">当前会话尚未与对端连通，连接成功后即可收发消息和文件。</p>
@@ -364,6 +371,33 @@
                   <div class="nas-task-list" id="nas-task-list"></div>
                 </section>
                 <input id="nas-upload-input" type="file" hidden />
+              </div>
+
+              <div class="chat-panel p2pssh-panel" id="panel-p2pssh">
+                <header class="p2pssh-head">
+                  <div class="p2pssh-head-main">
+                    <span class="peer-item-icon is-online" aria-hidden="true">
+                      <span class="ssh-glyph"></span>
+                    </span>
+                    <div class="p2pssh-head-text">
+                      <h2 id="p2pssh-title" data-i18n="P2P SSH">P2P SSH</h2>
+                      <p id="p2pssh-subtitle">—</p>
+                    </div>
+                  </div>
+                  <div class="p2pssh-head-actions">
+                    <code
+                      class="p2pssh-cmd"
+                      id="p2pssh-cmd"
+                      role="button"
+                      tabindex="0"
+                      data-i18n-title="点击复制" title="点击复制"
+                    >ssh -p PORT user@127.0.0.1</code>
+                    <button type="button" class="nas-head-btn" id="p2pssh-new-term" data-i18n="新建终端">新建终端</button>
+                    <button type="button" class="nas-head-btn is-danger" id="p2pssh-disconnect" data-i18n="断开">断开</button>
+                  </div>
+                </header>
+                <div class="p2pssh-tabs" id="p2pssh-tabs" role="tablist"></div>
+                <div class="p2pssh-term-host" id="p2pssh-term-host"></div>
               </div>
 
               <div class="chat-panel chat-main" id="chat-main">
@@ -487,6 +521,39 @@
           <div class="modal-actions">
             <button type="button" class="btn-ghost" data-close-modal data-i18n="取消">取消</button>
             <button type="button" class="btn-primary" id="btn-create-drive" data-i18n="添加">添加</button>
+          </div>
+        </div>
+        <div class="modal modal-hero-card" id="modal-new-p2pssh" hidden>
+          <div class="modal-drive-hero" aria-hidden="true">
+            <span class="ssh-glyph"></span>
+          </div>
+          <h3 data-i18n="新建 P2P SSH">新建 P2P SSH</h3>
+          <p
+            class="modal-desc"
+            data-i18n-html="若尚未部署 SSH 转发服务端，请先{link}，在目标设备上安装并保持运行。然后输入服务端 webrpc Token；认证口令可留空，连接时仍可修改。"
+            data-i18n-link="https://github.com/xiaoming-software/p2pssh-server"
+            data-i18n-link-label="下载 p2pssh-server"
+          >
+            若尚未部署 SSH 转发服务端，请先
+            <a href="https://github.com/xiaoming-software/p2pssh-server" target="_blank" rel="noopener noreferrer">下载 p2pssh-server</a>
+            ，在目标设备上安装并保持运行。然后输入服务端 webrpc Token；认证口令可留空，连接时仍可修改。
+          </p>
+          <label class="field">
+            <span data-i18n="服务端 Token">服务端 Token</span>
+            <input id="new-p2pssh-token" type="text" spellcheck="false" data-i18n-placeholder="请输入服务端 Token" placeholder="请输入服务端 Token" />
+          </label>
+          <label class="field">
+            <span data-i18n="认证口令">认证口令</span>
+            <input id="new-p2pssh-pass" type="text" data-i18n-placeholder="可留空" placeholder="可留空" />
+          </label>
+          <label class="field">
+            <span data-i18n="备注">备注</span>
+            <input id="new-p2pssh-remark" type="text" maxlength="40" data-i18n-placeholder="例如：家里 Linux" placeholder="例如：家里 Linux" />
+          </label>
+          <p class="modal-error" id="new-p2pssh-error" hidden data-i18n="请输入服务端 Token">请输入服务端 Token</p>
+          <div class="modal-actions">
+            <button type="button" class="btn-ghost" data-close-modal data-i18n="取消">取消</button>
+            <button type="button" class="btn-primary" id="btn-create-p2pssh" data-i18n="添加">添加</button>
           </div>
         </div>
         <div class="modal" id="modal-remark" hidden>
@@ -775,6 +842,8 @@
     </div>
   </div>
   <script src="js/i18n.js"></script>
+  <script src="vendor/xterm/xterm.js"></script>
+  <script src="vendor/xterm/xterm-addon-fit.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

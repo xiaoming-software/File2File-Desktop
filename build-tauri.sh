@@ -25,7 +25,7 @@ sync_ui() {
     echo "[ERROR] 找不到 ${PROJECT_ROOT}/index.html"
     exit 1
   fi
-  mkdir -p "${UI_DIR}/css" "${UI_DIR}/js" "${UI_DIR}/assets"
+  mkdir -p "${UI_DIR}/css" "${UI_DIR}/js" "${UI_DIR}/assets" "${UI_DIR}/vendor/xterm"
   cp -f "${PROJECT_ROOT}/index.html" "${UI_DIR}/index.html"
   cp -f "${PROJECT_ROOT}/screenshot.html" "${UI_DIR}/screenshot.html"
   cp -f "${PROJECT_ROOT}/css/app.css" "${UI_DIR}/css/app.css"
@@ -33,6 +33,9 @@ sync_ui() {
   cp -f "${PROJECT_ROOT}/js/app.js" "${UI_DIR}/js/app.js"
   cp -f "${PROJECT_ROOT}/js/i18n.js" "${UI_DIR}/js/i18n.js"
   cp -f "${PROJECT_ROOT}/js/screenshot.js" "${UI_DIR}/js/screenshot.js"
+  if [[ -d "${PROJECT_ROOT}/vendor/xterm" ]]; then
+    cp -f "${PROJECT_ROOT}/vendor/xterm/"* "${UI_DIR}/vendor/xterm/"
+  fi
   if [[ -f "${ASSETS_DIR}/file2file_logo.png" ]]; then
     cp -f "${ASSETS_DIR}/file2file_logo.png" "${UI_DIR}/assets/file2file_logo.png"
   fi

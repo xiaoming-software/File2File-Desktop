@@ -1,0 +1,16 @@
+[[permission]]
+identifier = "allow-p2pssh"
+description = "Allow P2P SSH tunnel and in-app terminal commands"
+commands.allow = [
+  "saved_p2pssh_list",
+  "saved_p2pssh_create",
+  "saved_p2pssh_update",
+  "saved_p2pssh_delete",
+  "p2pssh_connect",
+  "p2pssh_disconnect",
+  "p2pssh_status",
+  "p2pssh_term_open",
+  "p2pssh_term_write",
+  "p2pssh_term_resize",
+  "p2pssh_term_close",
+]

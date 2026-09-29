@@ -16,6 +16,7 @@ mod videocall;
 mod camera;
 mod portal;
 mod webrpc;
+mod p2pssh;
 
 #[cfg(target_os = "windows")]
 mod win;
@@ -80,6 +81,17 @@ fn main() {
             drives::saved_drives_create,
             drives::saved_drives_update,
             drives::saved_drives_delete,
+            p2pssh::saved_p2pssh_list,
+            p2pssh::saved_p2pssh_create,
+            p2pssh::saved_p2pssh_update,
+            p2pssh::saved_p2pssh_delete,
+            p2pssh::p2pssh_connect,
+            p2pssh::p2pssh_disconnect,
+            p2pssh::p2pssh_status,
+            p2pssh::p2pssh_term_open,
+            p2pssh::p2pssh_term_write,
+            p2pssh::p2pssh_term_resize,
+            p2pssh::p2pssh_term_close,
             chats::saved_chats_load,
             chats::saved_chats_append,
             chats::saved_chats_update,
@@ -123,6 +135,7 @@ fn main() {
             crate::win::silence_stdio();
             webrpc::install_exit_hooks();
             webrpc::set_app_handle(app.handle().clone());
+            p2pssh::set_app_handle(app.handle().clone());
             let window = app.get_webview_window("main").expect("missing main window");
             let _ = window.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)));
 

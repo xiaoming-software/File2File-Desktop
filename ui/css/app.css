@@ -1245,7 +1245,8 @@ html.is-tauri .titlebar {
 }
 
 .chat-glyph,
-.drive-glyph {
+.drive-glyph,
+.ssh-glyph {
   width: 16px;
   height: 16px;
   display: block;
@@ -1260,6 +1261,11 @@ html.is-tauri .titlebar {
 .drive-glyph {
   -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M6.4 19.5A4.6 4.6 0 0 1 6 10.4 6.1 6.1 0 0 1 17.6 9.2 5.1 5.1 0 0 1 18.1 19.5H6.4z'/%3E%3C/svg%3E") center / contain no-repeat;
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M6.4 19.5A4.6 4.6 0 0 1 6 10.4 6.1 6.1 0 0 1 17.6 9.2 5.1 5.1 0 0 1 18.1 19.5H6.4z'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.ssh-glyph {
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm1 3v2h4V8H5zm0 4v2h7v-2H5zm9 0v2h5v-2h-5z'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm1 3v2h4V8H5zm0 4v2h7v-2H5zm9 0v2h5v-2h-5z'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
 .session-item-title {
@@ -4483,4 +4489,381 @@ body.has-office-dock .nas-files {
   .session-pane {
     width: 220px;
   }
+}
+
+.session-pane-subhead {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.session-pane-subhead h2 {
+  font-size: 12px;
+}
+
+.p2pssh-panel {
+  display: none;
+  flex-direction: column;
+  min-height: 0;
+  position: relative;
+  background: #000000;
+  color: #e8ffe8;
+}
+
+.p2pssh-panel.is-visible {
+  display: flex;
+}
+
+.p2pssh-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.55);
+  background: linear-gradient(180deg, #3a3a3c 0%, #2c2c2e 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.p2pssh-head-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.p2pssh-head-text h2 {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: #f5f5f7;
+}
+
+.p2pssh-head-text p {
+  margin: 2px 0 0;
+  font-family: Menlo, Monaco, "SF Mono", monospace;
+  font-size: 11px;
+  color: rgba(51, 255, 0, 0.62);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.p2pssh-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.p2pssh-head-actions .nas-head-btn {
+  appearance: none;
+  background: rgba(0, 0, 0, 0.35);
+  color: #f5f5f7;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 7px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  flex-shrink: 0;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.p2pssh-head-actions .nas-head-btn:hover {
+  background: rgba(0, 0, 0, 0.5);
+  border-color: rgba(51, 255, 0, 0.35);
+  color: #d8ffd0;
+}
+
+.p2pssh-head-actions .nas-head-btn.is-danger {
+  color: #ff8b8b;
+  border-color: rgba(255, 95, 87, 0.35);
+  background: rgba(255, 95, 87, 0.1);
+}
+
+.p2pssh-head-actions .nas-head-btn.is-danger:hover {
+  background: rgba(255, 95, 87, 0.18);
+  color: #ffb0b0;
+}
+
+.p2pssh-cmd {
+  position: relative;
+  display: inline-block;
+  max-width: min(42vw, 420px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: Menlo, Monaco, "SF Mono", monospace;
+  font-size: 12px;
+  color: #33ff00;
+  background: #0a0a0a;
+  border: 1px solid rgba(51, 255, 0, 0.28);
+  border-radius: 7px;
+  padding: 6px 11px;
+  cursor: pointer;
+  user-select: none;
+  box-shadow: inset 0 0 0 1px rgba(51, 255, 0, 0.04);
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.p2pssh-cmd:hover {
+  background: #101410;
+  border-color: rgba(51, 255, 0, 0.5);
+  box-shadow: 0 0 0 1px rgba(51, 255, 0, 0.12);
+}
+
+.p2pssh-cmd.is-copied {
+  color: #66ff33;
+  border-color: rgba(102, 255, 51, 0.55);
+  background: rgba(51, 255, 0, 0.08);
+}
+
+.p2pssh-copy-toast {
+  position: absolute;
+  top: 58px;
+  left: 50%;
+  z-index: 40;
+  transform: translate(-50%, -6px) scale(0.98);
+  opacity: 0;
+  pointer-events: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  border-radius: 999px;
+  background: rgba(12, 18, 12, 0.92);
+  color: #66ff33;
+  border: 1px solid rgba(51, 255, 0, 0.35);
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(51, 255, 0, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  font-size: 12.5px;
+  font-weight: 550;
+  letter-spacing: -0.01em;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.p2pssh-copy-toast::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #33ff00;
+  box-shadow: 0 0 8px rgba(51, 255, 0, 0.7);
+  flex-shrink: 0;
+}
+
+.p2pssh-copy-toast.is-visible {
+  opacity: 1;
+  transform: translate(-50%, 0) scale(1);
+}
+
+.p2pssh-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 7px 10px 0;
+  background: linear-gradient(180deg, #3a3a3c 0%, #2c2c2e 100%);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.55);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.p2pssh-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 110px;
+  max-width: 200px;
+  padding: 0 8px 0 8px;
+  border-radius: 7px 7px 0 0;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(245, 245, 247, 0.72);
+  white-space: nowrap;
+  border: 1px solid transparent;
+  border-bottom: 0;
+}
+
+.p2pssh-tab.is-active {
+  background: #000000;
+  color: #f5f5f7;
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 -1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.p2pssh-tab.is-exited .p2pssh-tab-label {
+  opacity: 0.55;
+  text-decoration: line-through;
+  text-decoration-color: rgba(245, 245, 247, 0.35);
+}
+
+.p2pssh-tab-close {
+  appearance: none;
+  border: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: #ff5f57;
+  box-shadow: inset 0 -0.5px 0 rgba(0, 0, 0, 0.25);
+  color: transparent;
+  font-size: 9px;
+  line-height: 12px;
+  text-align: center;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  order: -1;
+}
+
+.p2pssh-tab-close:hover {
+  color: rgba(0, 0, 0, 0.7);
+}
+
+.p2pssh-tab-label {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  padding: 7px 4px 8px 0;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  text-align: left;
+}
+
+.p2pssh-term-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  background: #000000;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.p2pssh-term-pane {
+  position: absolute;
+  inset: 0;
+  padding: 10px 12px 12px;
+  display: none;
+}
+
+.p2pssh-term-pane.is-active {
+  display: block;
+}
+
+.p2pssh-term-pane .xterm {
+  height: 100%;
+}
+
+.p2pssh-term-pane .xterm-viewport {
+  background-color: #000000 !important;
+}
+
+.p2pssh-term-pane .xterm-screen {
+  background-color: #000000;
+}
+
+.p2pssh-term-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(51, 255, 0, 0.38);
+  font-family: Menlo, Monaco, "SF Mono", monospace;
+  font-size: 12px;
+  letter-spacing: 0.01em;
+  pointer-events: none;
+}
+
+
+.p2pssh-tab {
+  position: relative;
+}
+
+.p2pssh-tab-menu {
+  position: fixed;
+  z-index: 80;
+  min-width: 168px;
+  padding: 6px;
+  border-radius: 10px;
+  background: rgba(12, 14, 12, 0.96);
+  border: 1px solid rgba(51, 255, 0, 0.28);
+  box-shadow:
+    0 14px 36px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(51, 255, 0, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  display: none;
+}
+
+.p2pssh-tab-menu.is-open {
+  display: block;
+}
+
+.p2pssh-tab-menu button {
+  appearance: none;
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #d8ffd0;
+  text-align: left;
+  padding: 8px 10px;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.p2pssh-tab-menu button:hover {
+  background: rgba(51, 255, 0, 0.12);
+  color: #66ff33;
+}
+
+.p2pssh-tab-menu button.is-danger {
+  color: #ff9b9b;
+}
+
+.p2pssh-tab-menu button.is-danger:hover {
+  background: rgba(255, 95, 87, 0.14);
+  color: #ffb4b4;
+}
+
+.p2pssh-tab-menu-sep {
+  height: 1px;
+  margin: 5px 6px;
+  background: rgba(51, 255, 0, 0.12);
+}
+
+.connect-mark.is-ssh .ssh-glyph {
+  display: block;
+}
+
+.connect-mark .ssh-glyph {
+  display: none;
+  width: 48px;
+  height: 48px;
+}
+
+.connect-mark.is-ssh .chat-glyph,
+.connect-mark.is-ssh .drive-glyph {
+  display: none;
 }

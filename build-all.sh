@@ -31,7 +31,7 @@ prepare_frontend() {
     exit 1
   fi
   local ui_dir="${PROJECT_ROOT}/ui"
-  mkdir -p "${ui_dir}/css" "${ui_dir}/js" "${ui_dir}/assets"
+  mkdir -p "${ui_dir}/css" "${ui_dir}/js" "${ui_dir}/assets" "${ui_dir}/vendor/xterm"
   cp -f "${PROJECT_ROOT}/index.html" "${ui_dir}/index.html"
   cp -f "${PROJECT_ROOT}/screenshot.html" "${ui_dir}/screenshot.html"
   cp -f "${PROJECT_ROOT}/css/app.css" "${ui_dir}/css/app.css"
@@ -39,6 +39,9 @@ prepare_frontend() {
   cp -f "${PROJECT_ROOT}/js/app.js" "${ui_dir}/js/app.js"
   cp -f "${PROJECT_ROOT}/js/i18n.js" "${ui_dir}/js/i18n.js"
   cp -f "${PROJECT_ROOT}/js/screenshot.js" "${ui_dir}/js/screenshot.js"
+  if [[ -d "${PROJECT_ROOT}/vendor/xterm" ]]; then
+    cp -f "${PROJECT_ROOT}/vendor/xterm/"* "${ui_dir}/vendor/xterm/"
+  fi
   if [[ -f "${PROJECT_ROOT}/assets/file2file_logo.png" ]]; then
     cp -f "${PROJECT_ROOT}/assets/file2file_logo.png" "${ui_dir}/assets/file2file_logo.png"
   fi
