@@ -1,10 +1,12 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fs;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde::Serialize;
 use tauri::Emitter;
 
@@ -17,6 +19,8 @@ const GET_PATH_TIMEOUT_MS: i64 = 10_000;
 const GET_FILE_TIMEOUT_MS: i64 = 10_000;
 const DELETE_TIMEOUT_MS: i64 = 60_000;
 const SEARCH_TIMEOUT_MS: i64 = 30_000;
+const GET_THUMB_TIMEOUT_MS: i64 = 0;
+const THUMB_EDGE: u32 = 192;
 const GET_NAS_INFO: &str = "{\"type\":\"getNasInfo\"}";
 const NAS_FILE_WAIT: Duration = Duration::from_secs(90);
 
@@ -37,6 +41,15 @@ struct NasWatches {
     drive_ids: HashSet<u32>,
     pending: HashMap<u32, PendingFile>,
     list_paths: HashMap<u32, VecDeque<String>>,
+    /// Current explorer path polled every NAS_POLL.
+    browse_paths: HashMap<u32, String>,
+    /// Last emitted listing per (session, path); used to skip unchanged polls.
+    last_lists: HashMap<(u32, String), Vec<NasEntry>>,
+    /// Next backPath for this session must emit even if unchanged.
+    force_list: HashSet<u32>,
+    /// (session_id, dir, file_name) awaiting backThumb
+    thumb_pending: HashSet<(u32, String, String)>,
+    thumb_failed: HashSet<(u32, String, String)>,
 }
 
 static WATCHES: OnceLock<Mutex<NasWatches>> = OnceLock::new();
@@ -517,7 +530,7 @@ pub fn emit_back_nas_info(session_id: u32, data: &serde_json::Value) {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NasEntry {
     pub name: String,
@@ -590,11 +603,313 @@ pub fn emit_back_path(session_id: u32, data: &serde_json::Value, path: &str) {
         _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
     });
     let dir = resolve_list_path(session_id, path);
+    let (force, is_browse) = {
+        let mut g = lock();
+        let force = g.force_list.remove(&session_id);
+        let is_browse = g
+            .browse_paths
+            .get(&session_id)
+            .map(|p| p == &dir)
+            .unwrap_or(false);
+        let unchanged = g
+            .last_lists
+            .get(&(session_id, dir.clone()))
+            .map(|prev| prev == &entries)
+            .unwrap_or(false);
+        if unchanged && is_browse && !force {
+            eprintln!(
+                "webrpc: backPath unchanged session={session_id} path={dir} files={}",
+                entries.len()
+            );
+            return;
+        }
+        g.last_lists
+            .insert((session_id, dir.clone()), entries.clone());
+        (force, is_browse)
+    };
     eprintln!(
-        "webrpc: backPath session={session_id} path={dir} files={}",
+        "webrpc: backPath session={session_id} path={dir} files={} force={force}",
         entries.len()
     );
-    emit_path_event(session_id, true, entries, dir);
+    emit_path_event(session_id, true, entries.clone(), dir.clone());
+    if is_browse {
+        prefetch_thumbs(session_id, &dir, &entries);
+    }
+}
+
+fn can_thumb_name(name: &str) -> bool {
+    let ext = std::path::Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(
+        ext.as_str(),
+        "jpg"
+            | "jpeg"
+            | "png"
+            | "gif"
+            | "webp"
+            | "bmp"
+            | "mp4"
+            | "m4v"
+            | "mov"
+            | "qt"
+            | "mkv"
+            | "webm"
+            | "avi"
+            | "wmv"
+            | "asf"
+            | "flv"
+            | "f4v"
+            | "3gp"
+            | "3g2"
+            | "ts"
+            | "m2ts"
+            | "mts"
+            | "mpeg"
+            | "mpg"
+            | "mpe"
+            | "vob"
+            | "ogv"
+            | "rm"
+            | "rmvb"
+            | "divx"
+            | "xvid"
+    )
+}
+
+fn thumb_key(session_id: u32, dir: &str, name: &str) -> (u32, String, String) {
+    (
+        session_id,
+        normalize_path(dir),
+        storage::safe_filename(name),
+    )
+}
+
+fn prefetch_thumbs(session_id: u32, dir: &str, entries: &[NasEntry]) {
+    let dir = normalize_path(dir);
+    let names: Vec<String> = entries
+        .iter()
+        .filter(|e| !e.is_dir && can_thumb_name(&e.name))
+        .map(|e| e.name.clone())
+        .collect();
+    if names.is_empty() {
+        return;
+    }
+    thread::spawn(move || {
+        for name in names {
+            request_thumb(session_id, &dir, &name);
+        }
+    });
+}
+
+fn request_thumb(session_id: u32, dir: &str, name: &str) {
+    if session_id == 0 {
+        return;
+    }
+    let dir = normalize_path(dir);
+    let name = storage::safe_filename(name);
+    if name.is_empty() || !can_thumb_name(&name) {
+        return;
+    }
+    let key = thumb_key(session_id, &dir, &name);
+    {
+        let mut g = lock();
+        if g.thumb_failed.contains(&key) || g.thumb_pending.contains(&key) {
+            return;
+        }
+        g.thumb_pending.insert(key.clone());
+    }
+    if let Ok(cached) = storage::drive_thumb_file(session_id, &dir, &name, THUMB_EDGE) {
+        if cached.is_file() {
+            if let Ok(meta) = fs::metadata(&cached) {
+                if meta.len() > 0 {
+                    lock().thumb_pending.remove(&key);
+                    emit_thumb_event(
+                        session_id,
+                        true,
+                        &name,
+                        &dir,
+                        cached.to_string_lossy().to_string(),
+                        String::new(),
+                    );
+                    return;
+                }
+            }
+        }
+    }
+    let payload = serde_json::json!({
+        "type": "getThumb",
+        "fileName": name,
+        "filePath": dir,
+        "maxEdge": THUMB_EDGE,
+    })
+    .to_string();
+    let ok = webrpc::send_json_timeout(session_id, &payload, GET_THUMB_TIMEOUT_MS);
+    if !ok {
+        let mut g = lock();
+        g.thumb_pending.remove(&key);
+        g.thumb_failed.insert(key);
+        emit_thumb_event(
+            session_id,
+            false,
+            &name,
+            &dir,
+            String::new(),
+            "send-failed".into(),
+        );
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NasThumbEvent {
+    pub session_id: u32,
+    pub ok: bool,
+    pub file_name: String,
+    pub file_path: String,
+    pub local_path: String,
+    pub error: String,
+}
+
+fn emit_thumb_event(
+    session_id: u32,
+    ok: bool,
+    file_name: &str,
+    file_path: &str,
+    local_path: String,
+    error: String,
+) {
+    if let Some(app) = webrpc::app_handle() {
+        let _ = app.emit(
+            "webrpc-nas-thumb",
+            NasThumbEvent {
+                session_id,
+                ok,
+                file_name: file_name.to_string(),
+                file_path: normalize_path(file_path),
+                local_path,
+                error,
+            },
+        );
+    }
+}
+
+pub fn emit_back_thumb(session_id: u32, value: &serde_json::Value) {
+    if session_id == 0 {
+        return;
+    }
+    let file_name = storage::safe_filename(
+        value
+            .get("fileName")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+    );
+    let file_path = normalize_path(
+        value
+            .get("filePath")
+            .and_then(|v| v.as_str())
+            .unwrap_or("/"),
+    );
+    let key = thumb_key(session_id, &file_path, &file_name);
+    lock().thumb_pending.remove(&key);
+    let ok = value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+    if file_name.is_empty() {
+        return;
+    }
+    if !ok {
+        lock().thumb_failed.insert(key);
+        let err = value
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("failed")
+            .to_string();
+        eprintln!(
+            "webrpc: backThumb fail session={session_id} path={file_path} name={file_name} err={err}"
+        );
+        emit_thumb_event(
+            session_id,
+            false,
+            &file_name,
+            &file_path,
+            String::new(),
+            err,
+        );
+        return;
+    }
+    let data_b64 = value
+        .get("data")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if data_b64.is_empty() {
+        lock().thumb_failed.insert(key);
+        emit_thumb_event(
+            session_id,
+            false,
+            &file_name,
+            &file_path,
+            String::new(),
+            "empty".into(),
+        );
+        return;
+    }
+    let bytes = match B64.decode(data_b64) {
+        Ok(b) if !b.is_empty() => b,
+        _ => {
+            lock().thumb_failed.insert(key);
+            emit_thumb_event(
+                session_id,
+                false,
+                &file_name,
+                &file_path,
+                String::new(),
+                "decode".into(),
+            );
+            return;
+        }
+    };
+    let dest = match storage::drive_thumb_file(session_id, &file_path, &file_name, THUMB_EDGE) {
+        Ok(p) => p,
+        Err(err) => {
+            lock().thumb_failed.insert(key);
+            emit_thumb_event(
+                session_id,
+                false,
+                &file_name,
+                &file_path,
+                String::new(),
+                err,
+            );
+            return;
+        }
+    };
+    if let Err(err) = fs::write(&dest, &bytes) {
+        lock().thumb_failed.insert(key);
+        emit_thumb_event(
+            session_id,
+            false,
+            &file_name,
+            &file_path,
+            String::new(),
+            format!("write: {err}"),
+        );
+        return;
+    }
+    lock().thumb_failed.remove(&key);
+    eprintln!(
+        "webrpc: backThumb session={session_id} path={file_path} name={file_name} bytes={}",
+        bytes.len()
+    );
+    emit_thumb_event(
+        session_id,
+        true,
+        &file_name,
+        &file_path,
+        dest.to_string_lossy().to_string(),
+        String::new(),
+    );
 }
 
 fn parse_path_item(name: &str, value: &serde_json::Value) -> NasEntry {
@@ -1188,11 +1503,23 @@ fn get_path_payload(path: &str) -> String {
     .to_string()
 }
 
-fn request_path(session_id: u32, path: &str) {
+fn request_path_ex(session_id: u32, path: &str, set_watch: bool, force: bool) {
     let dir = normalize_path(path);
+    {
+        let mut g = lock();
+        if set_watch {
+            g.browse_paths.insert(session_id, dir.clone());
+        }
+        if force {
+            g.force_list.insert(session_id);
+            g.last_lists.remove(&(session_id, dir.clone()));
+        }
+    }
     push_list_path(session_id, &dir);
     let payload = get_path_payload(&dir);
-    eprintln!("webrpc: getPath session={session_id} path={dir}");
+    eprintln!(
+        "webrpc: getPath session={session_id} path={dir} watch={set_watch} force={force}"
+    );
     let ok = webrpc::send_json_timeout(session_id, &payload, GET_PATH_TIMEOUT_MS);
     if !ok {
         eprintln!("webrpc: getPath timeout session={session_id}");
@@ -1420,12 +1747,19 @@ pub fn nas_zip_entry(session_id: u32, name: String, path: String) {
 }
 
 #[tauri::command]
-pub fn nas_list_path(session_id: u32, path: String) {
+pub fn nas_list_path(
+    session_id: u32,
+    path: String,
+    set_watch: Option<bool>,
+    force: Option<bool>,
+) {
     if session_id == 0 {
         return;
     }
+    let set_watch = set_watch.unwrap_or(false);
+    let force = force.unwrap_or(false);
     thread::spawn(move || {
-        request_path(session_id, &path);
+        request_path_ex(session_id, &path, set_watch, force);
     });
 }
 
@@ -1467,6 +1801,11 @@ pub fn stop_watch(session_id: u32) {
         g.joins.remove(&session_id);
         g.drive_ids.remove(&session_id);
         g.list_paths.remove(&session_id);
+        g.browse_paths.remove(&session_id);
+        g.force_list.remove(&session_id);
+        g.last_lists.retain(|(sid, _), _| *sid != session_id);
+        g.thumb_pending.retain(|(sid, _, _)| *sid != session_id);
+        g.thumb_failed.retain(|(sid, _, _)| *sid != session_id);
         g.pending.remove(&session_id)
     };
     storage::delete_drive_temp_session(session_id);
@@ -1482,6 +1821,11 @@ pub fn stop_all() {
         g.drive_ids.clear();
         g.pending.clear();
         g.list_paths.clear();
+        g.browse_paths.clear();
+        g.force_list.clear();
+        g.last_lists.clear();
+        g.thumb_pending.clear();
+        g.thumb_failed.clear();
         std::mem::take(&mut g.joins)
     };
     storage::delete_all_drive_temp();
@@ -1491,12 +1835,28 @@ fn watch_loop(session_id: u32, epoch: u64) {
     if gen_of(session_id) != epoch {
         return;
     }
-    request_path(session_id, "/");
+    {
+        let mut g = lock();
+        g.browse_paths.insert(session_id, "/".into());
+    }
+    // Initial listing is requested by the UI via nas_list_path(set_watch/force).
+    // This loop keeps disk info fresh and silently re-lists the browse path.
+    let mut primed = false;
     loop {
         if gen_of(session_id) != epoch {
             return;
         }
         webrpc::send_json_timeout(session_id, GET_NAS_INFO, NAS_SEND_TIMEOUT_MS);
+        if primed {
+            let browse = lock()
+                .browse_paths
+                .get(&session_id)
+                .cloned()
+                .unwrap_or_else(|| "/".into());
+            request_path_ex(session_id, &browse, false, false);
+        } else {
+            primed = true;
+        }
         let deadline = Instant::now() + NAS_POLL;
         while Instant::now() < deadline {
             if gen_of(session_id) != epoch {

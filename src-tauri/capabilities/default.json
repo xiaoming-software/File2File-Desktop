@@ -1,7 +1,9 @@
 {
   "identifier": "default",
   "description": "File2File main window permissions",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-close",
@@ -21,6 +23,7 @@
     "allow-saved-sessions",
     "allow-saved-drives",
     "allow-p2pssh",
+    "allow-clipboard",
     "allow-saved-chats",
     "allow-file-stat",
     "allow-reveal-in-dir",

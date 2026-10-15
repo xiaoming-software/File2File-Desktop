@@ -2158,6 +2158,73 @@ html.is-tauri .titlebar {
   color: var(--text);
 }
 
+.nas-leading {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+}
+
+.nas-thumb-wrap {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: #d7dee8;
+  box-shadow: inset 0 0 0 1px rgba(16, 24, 40, 0.08);
+}
+
+.nas-tile .nas-thumb-wrap {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+}
+
+.nas-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  pointer-events: none;
+}
+
+.nas-thumb-play {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
+.nas-thumb-play::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 3px;
+  border-style: solid;
+  border-width: 3px 0 3px 5px;
+  border-color: transparent transparent transparent #fff;
+}
+
+.nas-tile .nas-thumb-play {
+  width: 16px;
+  height: 16px;
+  right: 3px;
+  bottom: 3px;
+}
+
+.nas-tile .nas-thumb-play::after {
+  left: 5.5px;
+  top: 4px;
+  border-width: 4px 0 4px 7px;
+}
+
 .nas-icon {
   width: 28px;
   height: 28px;
@@ -2386,7 +2453,7 @@ body.is-nas-selecting * {
   text-align: center;
 }
 
-.nas-row-name span,
+.nas-row-name .nas-name-text,
 .nas-tile-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4846,6 +4913,46 @@ body.has-office-dock .nas-files {
   background: rgba(255, 95, 87, 0.14);
   color: #ffb4b4;
 }
+
+.p2pssh-term-menu {
+  position: fixed;
+  z-index: 12000;
+  min-width: 132px;
+  padding: 4px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(22, 24, 28, 0.96);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  display: none;
+}
+
+.p2pssh-term-menu.is-open {
+  display: block;
+}
+
+.p2pssh-term-menu button {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.92);
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.p2pssh-term-menu button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.p2pssh-term-menu button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 
 .p2pssh-tab-menu-sep {
   height: 1px;

@@ -23,6 +23,7 @@ openh264 = { version = "0.8.1", features = ["source"] }
 enigo = "0.3"
 ureq = { version = "2", features = ["json"] }
 ropus = "0.12"
+arboard = { version = "3", features = ["wayland-data-control"] }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 nokhwa = { version = "0.10", features = ["input-msmf", "input-avfoundation"] }

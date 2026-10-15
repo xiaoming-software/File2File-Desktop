@@ -144,6 +144,22 @@ pub fn drive_temp_file(session_id: u32, file_path: &str, file_name: &str) -> Res
     Ok(dir.join(safe_filename(file_name)))
 }
 
+/// Local JPEG cache path for a NAS thumbnail (server getThumb / backThumb).
+pub fn drive_thumb_file(
+    session_id: u32,
+    file_path: &str,
+    file_name: &str,
+    edge: u32,
+) -> Result<PathBuf, String> {
+    let dir = drive_temp_session_dir(session_id)?
+        .join("thumbs")
+        .join(drive_path_key(file_path));
+    fs::create_dir_all(&dir).map_err(|err| format!("创建网盘缩略图目录失败: {err}"))?;
+    let name = safe_filename(file_name);
+    let stem = sanitize_component(&name);
+    Ok(dir.join(format!("{stem}_{edge}.jpg")))
+}
+
 pub fn drive_out_file(session_id: u32, file_path: &str, file_name: &str) -> Result<PathBuf, String> {
     let rel = {
         let dir = file_path.trim().replace('\\', "/");

@@ -25,7 +25,8 @@ log() { echo "[INFO] $*"; }
 err() { echo "[ERROR] $*" >&2; }
 
 prepare_frontend() {
-  # 复用本机脚本里的前端同步与图标检查，但不编 macOS。
+  # 前端源文件在仓库根目录 js/、css/；会同步覆盖到 ui/（Tauri frontendDist）。
+  # 改界面请改 js/app.js、css/app.css，不要只改 ui/（下次构建会被覆盖）。
   if [[ ! -f "${PROJECT_ROOT}/index.html" ]]; then
     err "找不到 ${PROJECT_ROOT}/index.html"
     exit 1

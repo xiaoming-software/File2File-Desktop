@@ -17,6 +17,7 @@ mod camera;
 mod portal;
 mod webrpc;
 mod p2pssh;
+mod clipboard;
 
 #[cfg(target_os = "windows")]
 mod win;
@@ -92,6 +93,8 @@ fn main() {
             p2pssh::p2pssh_term_write,
             p2pssh::p2pssh_term_resize,
             p2pssh::p2pssh_term_close,
+            clipboard::clipboard_write_text,
+            clipboard::clipboard_read_text,
             chats::saved_chats_load,
             chats::saved_chats_append,
             chats::saved_chats_update,

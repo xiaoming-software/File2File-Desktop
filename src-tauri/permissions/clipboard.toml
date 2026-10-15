@@ -1,0 +1,7 @@
+[[permission]]
+identifier = "allow-clipboard"
+description = "Allow reading and writing the system clipboard for terminal copy/paste"
+commands.allow = [
+  "clipboard_write_text",
+  "clipboard_read_text",
+]

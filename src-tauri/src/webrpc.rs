@@ -1652,6 +1652,8 @@ struct InboundHello {
 struct InboundText {
     session_id: u32,
     text: String,
+    #[serde(default)]
+    peer_token: String,
 }
 
 fn handle_data_payload(frame_session_id: u32, payload: Vec<u8>) {
@@ -1695,13 +1697,17 @@ fn handle_data_payload(frame_session_id: u32, payload: Vec<u8>) {
             "backRenameFile" => crate::nas::emit_back_rename_file(frame_session_id, &value),
             "backSearchFile" => crate::nas::emit_back_search_file(frame_session_id, &value),
             "backZipFile" => crate::nas::emit_back_zip_file(frame_session_id, &value),
+            "backThumb" => crate::nas::emit_back_thumb(frame_session_id, &value),
+            "getThumb" => {}
             _ => {}
         },
         Some(t) if t.is_number() => {
             let kind = t.as_i64().unwrap_or(0);
             let data = value.get("data").cloned().unwrap_or(serde_json::Value::Null);
             match kind {
-                1 => handle_hello_payload(data),
+                // Prefer callback frame session id — mobile peers put their local
+                // OpenSession id in hello JSON, which is not this side's rpc id.
+                1 => handle_hello_payload(frame_session_id, data),
                 2 => handle_text_payload(frame_session_id, data),
                 3 => handle_file_query(frame_session_id, data),
                 4 => handle_file_reply(frame_session_id, data),
@@ -1721,26 +1727,44 @@ fn handle_data_payload(frame_session_id: u32, payload: Vec<u8>) {
     }
 }
 
-fn handle_hello_payload(data: serde_json::Value) {
-    let hello: InboundHello = match serde_json::from_value(data) {
+fn handle_hello_payload(frame_session_id: u32, data: serde_json::Value) {
+    let mut hello: InboundHello = match serde_json::from_value(data) {
         Ok(v) => v,
         Err(_) => return,
     };
-    if hello.token.trim().is_empty() || hello.session_id == 0 {
+    if hello.token.trim().is_empty() {
         return;
     }
-    eprintln!(
-        "webrpc: peer hello token={} sessionId={}",
-        hello.token, hello.session_id
-    );
+    // Local callback frame id is authoritative for SendData/recv on this node.
+    // Payload sessionId is the peer's own id (often differs on mobile SDK).
+    let session_id = if frame_session_id != 0 {
+        frame_session_id
+    } else {
+        hello.session_id
+    };
+    if session_id == 0 {
+        return;
+    }
+    if hello.session_id != session_id {
+        eprintln!(
+            "webrpc: peer hello token={} frameSessionId={} payloadSessionId={} (using frame)",
+            hello.token, session_id, hello.session_id
+        );
+    } else {
+        eprintln!(
+            "webrpc: peer hello token={} sessionId={}",
+            hello.token, session_id
+        );
+    }
+    hello.session_id = session_id;
     if let Some(app) = APP_HANDLE.get() {
         let _ = app.emit("webrpc-peer-hello", hello.clone());
     }
-    remember_peer(hello.session_id, &hello.token);
+    remember_peer(session_id, &hello.token);
     if !hello.permission.trim().is_empty() {
-        remember_peer_pass(hello.session_id, &hello.permission);
+        remember_peer_pass(session_id, &hello.permission);
     }
-    start_session_monitor(hello.session_id);
+    start_session_monitor(session_id);
 }
 
 fn handle_text_payload(session_id: u32, data: serde_json::Value) {
@@ -1750,9 +1774,11 @@ fn handle_text_payload(session_id: u32, data: serde_json::Value) {
     let Some(text) = data.as_str() else {
         return;
     };
+    let peer_token = peer_token_of(session_id);
     eprintln!(
-        "webrpc: peer text sessionId={} bytes={}",
+        "webrpc: peer text sessionId={} peer={} bytes={}",
         session_id,
+        peer_token,
         text.len()
     );
     if let Some(app) = APP_HANDLE.get() {
@@ -1761,6 +1787,7 @@ fn handle_text_payload(session_id: u32, data: serde_json::Value) {
             InboundText {
                 session_id,
                 text: text.to_string(),
+                peer_token,
             },
         );
     }

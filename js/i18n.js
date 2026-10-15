@@ -429,6 +429,8 @@
     "对方 Token：": "Peer token: ",
     "复制全文": "Copy all",
     "复制": "Copy",
+    "粘贴": "Paste",
+    "粘贴失败": "Paste failed",
     "已复制": "Copied",
     "重新发送": "Resend",
     "重发": "Resend",

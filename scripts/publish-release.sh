@@ -3,7 +3,7 @@
 #
 # ========== 配置（改版本号主要改这里）==========
 # 也可临时覆盖：VERSION=0.2.0 ./scripts/publish-release.sh
-: "${VERSION:=0.1.0}"
+: "${VERSION:=1.1.0}"
 # 是否发布为草稿（1=草稿，0=正式发布）
 : "${DRAFT:=0}"
 # 仓库（留空则用当前 git remote origin），例如 xiaoming-software/File2File-Desktop

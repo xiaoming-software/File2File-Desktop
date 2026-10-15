@@ -11,7 +11,33 @@
   const NAS_AUDIO_MAX = 100 * 1024 * 1024;
   const NAS_TEXT_MAX = 100 * 1024 * 1024;
   const NAS_OFFICE_MAX = 100 * 1024 * 1024;
-  const VIDEO_EXT = ["mp4", "mov", "avi", "mkv", "webm", "m4v"];
+  const VIDEO_EXT = [
+    "mp4",
+    "m4v",
+    "mov",
+    "qt",
+    "mkv",
+    "webm",
+    "avi",
+    "wmv",
+    "asf",
+    "flv",
+    "f4v",
+    "3gp",
+    "3g2",
+    "ts",
+    "m2ts",
+    "mts",
+    "mpeg",
+    "mpg",
+    "mpe",
+    "vob",
+    "ogv",
+    "rm",
+    "rmvb",
+    "divx",
+    "xvid",
+  ];
   const OFFICE_EXT = ["doc", "docx", "xls", "xlsx", "ppt", "pptx", "pdf", "csv", "odt", "ods", "odp"];
   const AUDIO_EXT = ["mp3", "wav", "flac", "aac", "m4a", "ogg", "wma"];
   const TEXT_EXT = ["txt", "log", "md", "ini", "conf", "cfg", "properties", "env"];
@@ -456,6 +482,9 @@
         });
         window.__TAURI__.event.listen("webrpc-nas-path", function (event) {
           onNasPath(event.payload || {});
+        });
+        window.__TAURI__.event.listen("webrpc-nas-thumb", function (event) {
+          onNasThumb(event.payload || {});
         });
         window.__TAURI__.event.listen("webrpc-nas-file", function (event) {
           onNasFile(event.payload || {});
@@ -2916,9 +2945,25 @@
     if (!state.user || !payload) return;
     const sessionId = Number(payload.sessionId) || 0;
     if (!sessionId) return;
-    const session = state.sessions.find(function (item) {
+    let session = state.sessions.find(function (item) {
       return item.rpcSessionId === sessionId;
     });
+    if (!session) {
+      const peer = String(payload.peerToken || "").trim();
+      if (peer) {
+        session = state.sessions.find(function (item) {
+          return item.peerToken === peer && !isDrive(item) && !isP2pSsh(item);
+        });
+        if (session) {
+          session.rpcSessionId = sessionId;
+          session.connected = true;
+          session.connecting = false;
+          session.connectError = "";
+          persistItemUpdate(session);
+          renderWorkspace();
+        }
+      }
+    }
     if (!session) return;
     const text = payload.text == null ? "" : String(payload.text);
     const msg = textMsg("peer", text, Date.now(), "received");
@@ -2927,6 +2972,9 @@
     if (viewing) {
       session.messages.push(msg);
       if (session.chatsLoaded) renderChat();
+    } else if (session.chatsLoaded) {
+      session.messages.push(msg);
+      if (state.selectedId === session.id) renderChat();
     }
   }
 
@@ -3078,7 +3126,18 @@
     if (!token || sessionId <= 0) return;
     if (token === state.user.token) return;
 
-    let session = findByRpcSessionId(sessionId);
+    // Prefer existing chat row for this peer (mobile inbound hello), then rpc id,
+    // then an active drive with the same token.
+    let session = state.sessions.find(function (item) {
+      return (
+        item.peerToken === token &&
+        !isDrive(item) &&
+        !isP2pSsh(item)
+      );
+    });
+    if (!session) {
+      session = findByRpcSessionId(sessionId);
+    }
     if (!session) {
       session = state.drives.find(function (item) {
         return item.peerToken === token && (item.connecting || item.connected);
@@ -5657,6 +5716,8 @@
     tauriInvoke("nas_list_path", {
       sessionId: session.rpcSessionId,
       path: session.nasPath,
+      setWatch: true,
+      force: true,
     }).catch(function () {});
     if (state.selectedId === session.id) renderNasExplorer(session);
   }
@@ -5690,6 +5751,12 @@
     session.nasListSeq = (session.nasListSeq || 0) + 1;
     scheduleNasListTimeout(session, session.nasListSeq);
     tauriInvoke("nas_watch_start", { sessionId: session.rpcSessionId }).catch(function () {});
+    tauriInvoke("nas_list_path", {
+      sessionId: session.rpcSessionId,
+      path: "/",
+      setWatch: true,
+      force: true,
+    }).catch(function () {});
     if (state.selectedId === session.id) renderNasExplorer(session);
   }
 
@@ -5714,7 +5781,71 @@
       fileNum: Number(payload.fileNum) || 0,
       updatedAt: Date.now(),
     };
-    if (state.selectedId === drive.id) renderNasExplorer(drive);
+    // Only refresh disk stats; never rebuild the file list (avoids thumb flash).
+    if (state.selectedId === drive.id) renderNasStats(drive);
+  }
+
+  function nasEntryMetaKey(item) {
+    if (!item) return "";
+    const size =
+      item.size == null || !isFinite(item.size) ? "" : String(item.size);
+    const mtime = item.mtime ? String(item.mtime) : "";
+    return (
+      String(item.name || "") +
+      "\t" +
+      (item.isDir ? "1" : "0") +
+      "\t" +
+      size +
+      "\t" +
+      mtime
+    );
+  }
+
+  function nasEntryStructKey(item) {
+    if (!item) return "";
+    return String(item.name || "") + "\t" + (item.isDir ? "1" : "0");
+  }
+
+  function nasListFingerprint(list, keyFn) {
+    const arr = Array.isArray(list) ? list : [];
+    return arr.map(keyFn).join("\n");
+  }
+
+  function mergeNasThumbs(prevList, nextList) {
+    const prev = {};
+    (Array.isArray(prevList) ? prevList : []).forEach(function (item) {
+      if (item && item.name) prev[item.name] = item;
+    });
+    return (Array.isArray(nextList) ? nextList : []).map(function (item) {
+      const old = prev[item.name];
+      if (!old) return item;
+      if (old.thumbPath) item.thumbPath = old.thumbPath;
+      if (old.thumbFailed) item.thumbFailed = true;
+      if (old.kind) item.kind = old.kind;
+      return item;
+    });
+  }
+
+  function patchNasFileMeta(session) {
+    if (!nasFileBody || !session) return;
+    const list = Array.isArray(session.nasFiles) ? session.nasFiles : [];
+    list.forEach(function (file) {
+      if (!file || !file.name) return;
+      const isDir = !!file.isDir;
+      const size =
+        isDir || file.size == null || !isFinite(file.size) ? "—" : formatSize(file.size);
+      const mtime = file.mtime ? formatDateTime(file.mtime) : "—";
+      const rows = nasFileBody.querySelectorAll(".nas-row[data-nas-name]");
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        if (row.getAttribute("data-nas-name") !== file.name) continue;
+        const spans = row.querySelectorAll(":scope > span");
+        if (spans.length >= 3) {
+          spans[1].textContent = size;
+          spans[2].textContent = mtime;
+        }
+      }
+    });
   }
 
   function onNasPath(payload) {
@@ -5749,14 +5880,119 @@
     const drivePath = normalizeNasPath(drive.nasPath || "/");
     if (eventPath && eventPath !== drivePath) return;
     if (!eventPath && usedByPicker && nasMovePicker.path !== drivePath) return;
+    const wasLoading = !!drive.nasLoading;
     drive.nasLoading = false;
     if (!mappedOk) {
       drive.nasListError = t("文件列表请求超时");
-    } else {
-      drive.nasListError = "";
-      drive.nasFiles = mapped;
+      if (state.selectedId === drive.id) renderNasExplorer(drive);
+      return;
     }
-    if (state.selectedId === drive.id) renderNasExplorer(drive);
+    drive.nasListError = "";
+    const prev = Array.isArray(drive.nasFiles) ? drive.nasFiles : [];
+    const next = mergeNasThumbs(prev, mapped);
+    const sameMeta =
+      !wasLoading &&
+      nasListFingerprint(prev, nasEntryMetaKey) ===
+        nasListFingerprint(next, nasEntryMetaKey);
+    if (sameMeta) {
+      drive.nasFiles = next;
+      return;
+    }
+    const sameStruct =
+      !wasLoading &&
+      nasListFingerprint(prev, nasEntryStructKey) ===
+        nasListFingerprint(next, nasEntryStructKey);
+    drive.nasFiles = next;
+    if (state.selectedId !== drive.id) return;
+    if (sameStruct) {
+      patchNasFileMeta(drive);
+      return;
+    }
+    renderNasExplorer(drive);
+  }
+
+  function onNasThumb(payload) {
+    const sid = Number(payload.sessionId) || 0;
+    if (!sid) return;
+    const drive = state.drives.find(function (item) {
+      return item.rpcSessionId === sid;
+    });
+    if (!drive) return;
+    const name = String(payload.fileName || "");
+    const dir = normalizeNasPath(payload.filePath || "/");
+    if (!name) return;
+    if (dir !== normalizeNasPath(drive.nasPath || "/")) return;
+    const file = findNasEntry(drive, name);
+    if (!file || file.isDir) return;
+    if (payload.ok && payload.localPath) {
+      file.thumbPath = String(payload.localPath);
+      file.thumbFailed = false;
+    } else {
+      file.thumbFailed = true;
+      file.thumbPath = "";
+    }
+    if (state.selectedId === drive.id) {
+      applyNasThumbDom(name, file);
+    }
+  }
+
+  function nasLeadingHtml(file, kind) {
+    if (file && file.thumbPath && !file.thumbFailed) {
+      const src = convertFileSrc(file.thumbPath);
+      if (src) {
+        const isVideo = kind.cls === "is-video";
+        return (
+          '<span class="nas-thumb-wrap' +
+          (isVideo ? " is-video" : "") +
+          '"><img class="nas-thumb" src="' +
+          escapeHtml(src) +
+          '" alt="" draggable="false" loading="lazy" />' +
+          (isVideo ? '<span class="nas-thumb-play" aria-hidden="true"></span>' : "") +
+          "</span>"
+        );
+      }
+    }
+    return '<span class="nas-icon ' + kind.cls + '"></span>';
+  }
+
+  function applyNasThumbDom(name, file) {
+    if (!nasFileBody || !file) return;
+    const kind = nasKindMeta(file.kind || classifyNasName(file.name, !!file.isDir));
+    const html = nasLeadingHtml(file, kind);
+    nasFileBody.querySelectorAll(".nas-row[data-nas-name], .nas-tile[data-nas-name]").forEach(function (el) {
+      if (el.getAttribute("data-nas-name") !== name) return;
+      const slot = el.querySelector(".nas-leading");
+      if (slot) slot.innerHTML = html;
+    });
+    bindNasThumbErrors();
+  }
+
+  function bindNasThumbErrors() {
+    if (!nasFileBody) return;
+    nasFileBody.querySelectorAll("img.nas-thumb").forEach(function (img) {
+      if (img.dataset.thumbBound) return;
+      img.dataset.thumbBound = "1";
+      img.addEventListener("error", function () {
+        const row = img.closest("[data-nas-name]");
+        const name = row ? row.getAttribute("data-nas-name") || "" : "";
+        const drive = selectedDrive();
+        const file = drive && name ? findNasEntry(drive, name) : null;
+        if (file) {
+          file.thumbFailed = true;
+          file.thumbPath = "";
+        }
+        const kind = nasKindMeta(classifyNasName(name, false));
+        nasFileBody
+          .querySelectorAll(".nas-row[data-nas-name], .nas-tile[data-nas-name]")
+          .forEach(function (el) {
+            if (el.getAttribute("data-nas-name") !== name) return;
+            const slot = el.querySelector(".nas-leading");
+            if (slot) {
+              slot.innerHTML = '<span class="nas-icon ' + kind.cls + '"></span>';
+            }
+          });
+      });
+    });
   }
 
   function findNasEntry(session, name) {
@@ -7124,15 +7360,16 @@
                         : kind.cls === "is-pdf"
                           ? " is-pdf"
                           : "";
+        const leading = nasLeadingHtml(file, kind);
         return (
           '<div class="nas-row' +
           rowClass +
           '"' +
           attrs +
           ">" +
-          '<div class="nas-row-name"><span class="nas-icon ' +
-          kind.cls +
-          '"></span><span class="nas-name-text" title="' +
+          '<div class="nas-row-name"><span class="nas-leading">' +
+          leading +
+          '</span><span class="nas-name-text" title="' +
           escapeHtml(name) +
           '">' +
           escapeHtml(name) +
@@ -7148,9 +7385,9 @@
           rowClass +
           '"' +
           attrs +
-          '><span class="nas-icon ' +
-          kind.cls +
-          '"></span><span class="nas-tile-name nas-name-text" title="' +
+          '><span class="nas-leading">' +
+          leading +
+          '</span><span class="nas-tile-name nas-name-text" title="' +
           escapeHtml(name) +
           '">' +
           escapeHtml(name) +
@@ -7163,6 +7400,7 @@
     restoreNasRenameEditor();
     applyPendingNasSearchSelect(session);
     applyPendingNasZipSelect(session);
+    bindNasThumbErrors();
   }
 
   function renderNasCrumbs(path) {
@@ -7209,11 +7447,8 @@
     return "file";
   }
 
-  function renderNasExplorer(session) {
+  function renderNasStats(session) {
     if (!session) return;
-    if (nasTitle) nasTitle.textContent = session.remark || t("网盘连接");
-    renderNasCrumbs(session.nasPath || "/");
-    applyNasView();
     const info = session.nasInfo;
     if (!info) {
       if (nasDiskTotal) nasDiskTotal.textContent = "—";
@@ -7225,24 +7460,32 @@
         nasMeterBar.parentElement.classList.remove("is-warn", "is-full");
       }
       if (nasStatsHint) nasStatsHint.textContent = t("正在获取网盘信息…");
-    } else {
-      const total = info.diskSize || 0;
-      const free = info.banlenSize || 0;
-      const used = total > free ? total - free : 0;
-      const pct = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
-      if (nasDiskTotal) nasDiskTotal.textContent = formatSize(total);
-      if (nasDiskFree) nasDiskFree.textContent = formatSize(free);
-      if (nasDiskUsed) nasDiskUsed.textContent = formatSize(used) + "  (" + pct + "%)";
-      if (nasFileNum) nasFileNum.textContent = String(info.fileNum || 0);
-      if (nasMeterBar) nasMeterBar.style.width = pct + "%";
-      if (nasMeterBar && nasMeterBar.parentElement) {
-        nasMeterBar.parentElement.classList.toggle("is-warn", pct >= 80 && pct < 95);
-        nasMeterBar.parentElement.classList.toggle("is-full", pct >= 95);
-      }
-      if (nasStatsHint) {
-        nasStatsHint.textContent = t("更新于 {time}", { time: formatClock(info.updatedAt) });
-      }
+      return;
     }
+    const total = info.diskSize || 0;
+    const free = info.banlenSize || 0;
+    const used = total > free ? total - free : 0;
+    const pct = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
+    if (nasDiskTotal) nasDiskTotal.textContent = formatSize(total);
+    if (nasDiskFree) nasDiskFree.textContent = formatSize(free);
+    if (nasDiskUsed) nasDiskUsed.textContent = formatSize(used) + "  (" + pct + "%)";
+    if (nasFileNum) nasFileNum.textContent = String(info.fileNum || 0);
+    if (nasMeterBar) nasMeterBar.style.width = pct + "%";
+    if (nasMeterBar && nasMeterBar.parentElement) {
+      nasMeterBar.parentElement.classList.toggle("is-warn", pct >= 80 && pct < 95);
+      nasMeterBar.parentElement.classList.toggle("is-full", pct >= 95);
+    }
+    if (nasStatsHint) {
+      nasStatsHint.textContent = t("更新于 {time}", { time: formatClock(info.updatedAt) });
+    }
+  }
+
+  function renderNasExplorer(session) {
+    if (!session) return;
+    if (nasTitle) nasTitle.textContent = session.remark || t("网盘连接");
+    renderNasCrumbs(session.nasPath || "/");
+    applyNasView();
+    renderNasStats(session);
     renderNasFiles(session);
     renderNasTaskPanel(session);
     ensureNasTasks(session);
@@ -8084,12 +8327,44 @@
   }
 
   function copyText(text) {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      return navigator.clipboard.writeText(text).catch(function () {
-        return copyTextFallback(text);
+    const value = text == null ? "" : String(text);
+    if (isTauri()) {
+      return tauriInvoke("clipboard_write_text", { text: value }).catch(function () {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          return navigator.clipboard.writeText(value).catch(function () {
+            return copyTextFallback(value);
+          });
+        }
+        return copyTextFallback(value);
       });
     }
-    return copyTextFallback(text);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(value).catch(function () {
+        return copyTextFallback(value);
+      });
+    }
+    return copyTextFallback(value);
+  }
+
+  function readClipboardText() {
+    if (isTauri()) {
+      return tauriInvoke("clipboard_read_text").catch(function () {
+        if (navigator.clipboard && navigator.clipboard.readText) {
+          return navigator.clipboard.readText();
+        }
+        return Promise.reject(new Error("clipboard-unavailable"));
+      });
+    }
+    if (navigator.clipboard && navigator.clipboard.readText) {
+      return navigator.clipboard.readText();
+    }
+    return Promise.reject(new Error("clipboard-unavailable"));
+  }
+
+  function isAppleDesktop() {
+    const platform = String(navigator.platform || "");
+    const ua = String(navigator.userAgent || "");
+    return /Mac|iPhone|iPad|iPod/i.test(platform) || /Mac OS X/i.test(ua);
   }
 
   function copyTextFallback(text) {
@@ -9181,6 +9456,189 @@
     }
   }
 
+  function pasteIntoP2psshTerm(term, entry, termId) {
+    if (!term) return Promise.resolve();
+    const meta = (entry.terms || []).find(function (item) {
+      return item.termId === termId;
+    });
+    if (meta && meta.exited) return Promise.resolve();
+    return readClipboardText()
+      .then(function (text) {
+        if (text == null || text === "") return;
+        try {
+          if (typeof term.paste === "function") term.paste(String(text));
+          else {
+            tauriInvoke("p2pssh_term_write", {
+              termId: termId,
+              data: b64EncodeUtf8Bytes(new TextEncoder().encode(String(text))),
+            }).catch(function () {});
+          }
+        } catch (_) {}
+      })
+      .catch(function () {
+        showP2psshCopyToast(t("粘贴失败"));
+      });
+  }
+
+  function copyP2psshTermSelection(term) {
+    if (!term || typeof term.getSelection !== "function") {
+      return Promise.reject(new Error("no-selection"));
+    }
+    const sel = term.getSelection();
+    if (!sel) return Promise.reject(new Error("no-selection"));
+    return copyText(sel).then(function () {
+      showP2psshCopyToast(t("已复制"));
+    });
+  }
+
+  function ensureP2psshTermMenu() {
+    let menu = document.getElementById("p2pssh-term-menu");
+    if (menu) return menu;
+    menu = document.createElement("div");
+    menu.id = "p2pssh-term-menu";
+    menu.className = "p2pssh-term-menu";
+    menu.setAttribute("role", "menu");
+    menu.innerHTML =
+      '<button type="button" role="menuitem" data-p2pssh-term-menu="copy"></button>' +
+      '<button type="button" role="menuitem" data-p2pssh-term-menu="paste"></button>';
+    document.body.appendChild(menu);
+    menu.addEventListener("click", function (event) {
+      const btn = event.target.closest("[data-p2pssh-term-menu]");
+      if (!btn) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const action = btn.getAttribute("data-p2pssh-term-menu");
+      const termId = menu.getAttribute("data-term-id") || "";
+      const slot = termId ? p2psshTermMap[termId] : null;
+      const entry = slot ? findP2pSsh(slot.entryId) : findP2pSsh(state.selectedId);
+      hideP2psshTermMenu();
+      if (!slot || !slot.term || !entry) return;
+      if (action === "copy") {
+        copyP2psshTermSelection(slot.term).catch(function () {
+          showP2psshCopyToast(t("复制失败"));
+        });
+      } else if (action === "paste") {
+        pasteIntoP2psshTerm(slot.term, entry, termId);
+      }
+    });
+    if (!window.__p2psshTermMenuGlobalBound) {
+      window.__p2psshTermMenuGlobalBound = true;
+      document.addEventListener("click", function (event) {
+        const el = document.getElementById("p2pssh-term-menu");
+        if (!el || !el.classList.contains("is-open")) return;
+        if (event.target.closest("#p2pssh-term-menu")) return;
+        hideP2psshTermMenu();
+      });
+      document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape") hideP2psshTermMenu();
+      });
+      window.addEventListener("blur", hideP2psshTermMenu);
+      window.addEventListener("resize", hideP2psshTermMenu);
+    }
+    return menu;
+  }
+
+  function hideP2psshTermMenu() {
+    const menu = document.getElementById("p2pssh-term-menu");
+    if (!menu) return;
+    menu.classList.remove("is-open");
+    menu.removeAttribute("data-term-id");
+  }
+
+  function showP2psshTermMenu(termId, clientX, clientY, hasSelection) {
+    const menu = ensureP2psshTermMenu();
+    const copyBtn = menu.querySelector('[data-p2pssh-term-menu="copy"]');
+    const pasteBtn = menu.querySelector('[data-p2pssh-term-menu="paste"]');
+    if (copyBtn) {
+      copyBtn.textContent = t("复制");
+      copyBtn.disabled = !hasSelection;
+    }
+    if (pasteBtn) pasteBtn.textContent = t("粘贴");
+    menu.setAttribute("data-term-id", termId || "");
+    menu.classList.add("is-open");
+    const pad = 8;
+    const vw = window.innerWidth || 800;
+    const vh = window.innerHeight || 600;
+    menu.style.left = "0px";
+    menu.style.top = "0px";
+    const rect = menu.getBoundingClientRect();
+    let left = clientX;
+    let top = clientY;
+    if (left + rect.width + pad > vw) left = Math.max(pad, vw - rect.width - pad);
+    if (top + rect.height + pad > vh) top = Math.max(pad, vh - rect.height - pad);
+    menu.style.left = left + "px";
+    menu.style.top = top + "px";
+  }
+
+  function bindP2psshTermClipboard(term, entry, termId, pane) {
+    const apple = isAppleDesktop();
+    if (typeof term.attachCustomKeyEventHandler === "function") {
+      term.attachCustomKeyEventHandler(function (ev) {
+        if (!ev || ev.type !== "keydown") return true;
+        const key = String(ev.key || "").toLowerCase();
+        const mod = apple ? !!ev.metaKey : !!ev.ctrlKey;
+        if (!mod && !(key === "insert" && ev.shiftKey && !apple)) return true;
+        if (key === "c" && mod) {
+          const hasSel = !!(term.hasSelection && term.hasSelection());
+          if (apple) {
+            if (!hasSel) return true;
+            ev.preventDefault();
+            copyP2psshTermSelection(term).catch(function () {});
+            return false;
+          }
+          if (ev.shiftKey || hasSel) {
+            if (!hasSel) return false;
+            ev.preventDefault();
+            copyP2psshTermSelection(term).catch(function () {});
+            return false;
+          }
+          return true;
+        }
+        if (key === "v" && mod) {
+          if (apple && ev.ctrlKey && !ev.metaKey) return true;
+          ev.preventDefault();
+          pasteIntoP2psshTerm(term, entry, termId);
+          return false;
+        }
+        if (key === "insert" && ev.shiftKey && !apple) {
+          ev.preventDefault();
+          pasteIntoP2psshTerm(term, entry, termId);
+          return false;
+        }
+        return true;
+      });
+    }
+    pane.addEventListener(
+      "paste",
+      function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        const clip = event.clipboardData || window.clipboardData;
+        const fromEvent = clip && typeof clip.getData === "function" ? clip.getData("text") : "";
+        if (fromEvent) {
+          try {
+            if (typeof term.paste === "function") term.paste(fromEvent);
+            else {
+              tauriInvoke("p2pssh_term_write", {
+                termId: termId,
+                data: b64EncodeUtf8Bytes(new TextEncoder().encode(fromEvent)),
+              }).catch(function () {});
+            }
+          } catch (_) {}
+          return;
+        }
+        pasteIntoP2psshTerm(term, entry, termId);
+      },
+      true
+    );
+    pane.addEventListener("contextmenu", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      const hasSel = !!(term.hasSelection && term.hasSelection() && term.getSelection());
+      showP2psshTermMenu(termId, event.clientX, event.clientY, hasSel);
+    });
+  }
+
   function ensureP2psshXterm(entry, termId, pane) {
     if (p2psshTermMap[termId]) return;
     const TerminalCtor = window.Terminal;
@@ -9195,13 +9653,13 @@
       cursorBlink: true,
       cursorStyle: "block",
       disableStdin: false,
+      rightClickSelectsWord: false,
       fontSize: 12,
       lineHeight: 1.2,
       letterSpacing: 0,
       fontFamily:
         'Menlo, Monaco, "SF Mono", "Cascadia Mono", "Courier New", monospace',
       theme: {
-        // macOS Terminal.app "Homebrew" inspired (green on black)
         background: "#000000",
         foreground: "#33ff00",
         cursor: "#33ff00",
@@ -9244,6 +9702,7 @@
         data: b64EncodeUtf8Bytes(new TextEncoder().encode(data)),
       }).catch(function () {});
     });
+    bindP2psshTermClipboard(term, entry, termId, pane);
     pane.addEventListener("mousedown", function () {
       try {
         term.focus();
@@ -9466,19 +9925,21 @@
     const text =
       entry.sshCommand ||
       (entry.localPort ? "ssh -p " + entry.localPort + " user@127.0.0.1" : "");
-    if (!text || !navigator.clipboard || !navigator.clipboard.writeText) return;
-    navigator.clipboard.writeText(text).then(function () {
-      p2psshCmd.classList.add("is-copied");
-      const prev = p2psshCmd.getAttribute("title") || "";
-      p2psshCmd.setAttribute("title", t("已复制"));
-      showP2psshCopyToast(t("命令已复制到剪贴板"));
-      window.setTimeout(function () {
-        p2psshCmd.classList.remove("is-copied");
-        p2psshCmd.setAttribute("title", prev || t("点击复制"));
-      }, 3000);
-    }).catch(function () {
-      showP2psshCopyToast(t("复制失败"));
-    });
+    if (!text) return;
+    copyText(text)
+      .then(function () {
+        p2psshCmd.classList.add("is-copied");
+        const prev = p2psshCmd.getAttribute("title") || "";
+        p2psshCmd.setAttribute("title", t("已复制"));
+        showP2psshCopyToast(t("命令已复制到剪贴板"));
+        window.setTimeout(function () {
+          p2psshCmd.classList.remove("is-copied");
+          p2psshCmd.setAttribute("title", prev || t("点击复制"));
+        }, 3000);
+      })
+      .catch(function () {
+        showP2psshCopyToast(t("复制失败"));
+      });
   }
 
   function bindP2psshPanel() {
