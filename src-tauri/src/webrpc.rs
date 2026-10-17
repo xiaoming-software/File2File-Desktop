@@ -1656,6 +1656,14 @@ struct InboundText {
     peer_token: String,
 }
 
+fn json_u64(value: &serde_json::Value) -> Option<u64> {
+    value.as_u64().or_else(|| {
+        value
+            .as_i64()
+            .and_then(|n| if n >= 0 { Some(n as u64) } else { None })
+    })
+}
+
 fn handle_data_payload(frame_session_id: u32, payload: Vec<u8>) {
     if payload.len() >= 4 && payload[0] == 0 && payload[1] == 0 && payload[2] == 0 {
         match payload[3] {
@@ -1684,6 +1692,14 @@ fn handle_data_payload(frame_session_id: u32, payload: Vec<u8>) {
                 frame_session_id,
                 value.get("data").unwrap_or(&serde_json::Value::Null),
                 value.get("path").and_then(|v| v.as_str()).unwrap_or(""),
+            ),
+            "backPut" => crate::tasks::on_back_put(
+                frame_session_id,
+                value.get("written").and_then(json_u64).unwrap_or(0),
+                value.get("size").and_then(json_u64).unwrap_or(0),
+                value.get("done").and_then(|v| v.as_bool()).unwrap_or(false),
+                value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
+                value.get("error").and_then(|v| v.as_str()).unwrap_or(""),
             ),
             "backFile" => crate::nas::emit_back_file(
                 frame_session_id,

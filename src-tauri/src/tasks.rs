@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -76,6 +77,13 @@ struct TaskState {
     cancelled: HashMap<u32, Arc<AtomicBool>>,
     uploads: HashMap<u32, LiveXfer>,
     downloads: HashMap<u32, LiveXfer>,
+    put_wait: HashMap<u32, mpsc::Sender<PutDone>>,
+}
+
+pub(crate) struct PutDone {
+    written: u64,
+    ok: bool,
+    error: String,
 }
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -487,41 +495,42 @@ fn run_upload(
         "size": size,
     })
     .to_string();
+    let rx = watch_put(session_id);
     if !webrpc::send_json_timeout(session_id, &payload, GET_FILE_TIMEOUT_MS) {
+        lock().put_wait.remove(&session_id);
         return Err("上传请求超时".into());
     }
     if !transfer_alive(session_id) {
+        lock().put_wait.remove(&session_id);
         return Err(FAIL_CLOSED.into());
     }
-    if size == 0 {
+    if size > 0 {
+        {
+            let mut g = lock();
+            g.uploads.insert(
+                session_id,
+                LiveXfer {
+                    task_id: task.id.clone(),
+                    started,
+                    size,
+                    bytes: 0,
+                },
+            );
+        }
+        progress(key, &task.id, 0, started, size);
+        spawn_live_ticker(session_id);
         thread::sleep(Duration::from_millis(80));
-        return Ok(0);
+        if !transfer_alive(session_id) {
+            lock().put_wait.remove(&session_id);
+            return Err(FAIL_CLOSED.into());
+        }
+        let _ = webrpc::send_local_file(session_id, &out.to_string_lossy());
+        if !transfer_alive(session_id) {
+            lock().put_wait.remove(&session_id);
+            return Err(FAIL_CLOSED.into());
+        }
     }
-    {
-        let mut g = lock();
-        g.uploads.insert(
-            session_id,
-            LiveXfer {
-                task_id: task.id.clone(),
-                started,
-                size,
-                bytes: 0,
-            },
-        );
-    }
-    spawn_live_ticker(session_id);
-    thread::sleep(Duration::from_millis(80));
-    if !transfer_alive(session_id) {
-        return Err(FAIL_CLOSED.into());
-    }
-    let ok = webrpc::send_local_file(session_id, &out.to_string_lossy()) == 1;
-    if !transfer_alive(session_id) {
-        return Err(FAIL_CLOSED.into());
-    }
-    if !ok {
-        return Err("上传失败".into());
-    }
-    Ok(size)
+    confirm_put(session_id, &dir, &name, size, rx)
 }
 
 fn run_download(
@@ -679,6 +688,95 @@ pub fn is_session_busy(session_id: u32) -> bool {
     lock().busy.contains(&session_id)
 }
 
+pub(crate) fn cancel_put_watch(session_id: u32) {
+    lock().put_wait.remove(&session_id);
+}
+
+pub(crate) fn watch_put(session_id: u32) -> mpsc::Receiver<PutDone> {
+    let (tx, rx) = mpsc::channel();
+    lock().put_wait.insert(session_id, tx);
+    rx
+}
+
+pub(crate) fn on_back_put(session_id: u32, written: u64, total: u64, done: bool, ok: bool, error: &str) {
+    if session_id == 0 {
+        return;
+    }
+    eprintln!(
+        "webrpc: backPut session={session_id} written={written} size={total} done={done} ok={ok} error={error}"
+    );
+    let (key, live) = {
+        let mut g = lock();
+        if let Some(item) = g.uploads.get_mut(&session_id) {
+            item.bytes = item.bytes.max(written);
+            if total > 0 {
+                item.size = total;
+            }
+        }
+        let live = g.uploads.get(&session_id).cloned();
+        let key = g.sessions.get(&session_id).cloned();
+        (key, live)
+    };
+    if let (Some(key), Some(live)) = (key, live) {
+        progress(&key, &live.task_id, live.bytes, live.started, live.size);
+    }
+    if !done {
+        return;
+    }
+    let tx = lock().put_wait.get(&session_id).cloned();
+    if let Some(tx) = tx {
+        let _ = tx.send(PutDone {
+            written,
+            ok,
+            error: error.to_string(),
+        });
+    }
+}
+
+pub(crate) fn confirm_put(
+    session_id: u32,
+    dir: &str,
+    name: &str,
+    size: u64,
+    rx: mpsc::Receiver<PutDone>,
+) -> Result<u64, String> {
+    let done = match rx.recv_timeout(Duration::from_secs(30)) {
+        Ok(item) => item,
+        Err(_) => {
+            lock().put_wait.remove(&session_id);
+            return Err("上传未确认完成".into());
+        }
+    };
+    lock().put_wait.remove(&session_id);
+    if !done.ok || done.written != size {
+        let _ = nas::delete_entry_wait(session_id, dir, name);
+        let why = if done.error.is_empty() {
+            "字节数不一致".to_string()
+        } else {
+            done.error
+        };
+        return Err(format!("上传校验失败: {why}"));
+    }
+    let mut last_err = String::from("目录核对失败");
+    for attempt in 0..4 {
+        if attempt > 0 {
+            thread::sleep(Duration::from_millis(400));
+        }
+        if !transfer_alive(session_id) {
+            return Err(FAIL_CLOSED.into());
+        }
+        match nas::file_size_listed(session_id, dir, name) {
+            Ok(listed) if listed == size => return Ok(size),
+            Ok(listed) => last_err = format!("目录大小 {listed} 与本地 {size} 不一致"),
+            Err(err) => last_err = err,
+        }
+    }
+    if !last_err.contains("超时") {
+        let _ = nas::delete_entry_wait(session_id, dir, name);
+    }
+    Err(format!("目录核对失败: {last_err}"))
+}
+
 pub fn on_upload_ack(session_id: u32, _file_name: &str, bytes: u64) {
     if !session_active(session_id) {
         return;
@@ -741,6 +839,7 @@ pub fn on_session_dead(session_id: u32) {
         g.busy.remove(&session_id);
         g.uploads.remove(&session_id);
         g.downloads.remove(&session_id);
+        g.put_wait.remove(&session_id);
         g.cancelled.remove(&session_id);
         g.sessions.remove(&session_id);
         key

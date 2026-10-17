@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -47,6 +48,10 @@ struct NasWatches {
     last_lists: HashMap<(u32, String), Vec<NasEntry>>,
     /// Next backPath for this session must emit even if unchanged.
     force_list: HashSet<u32>,
+    /// One-shot directory listing for upload byte verification.
+    list_wait: Option<(u32, String, mpsc::Sender<Vec<NasEntry>>)>,
+    /// One-shot delete result for upload rollback.
+    delete_wait: Option<(u32, mpsc::Sender<bool>)>,
     /// (session_id, dir, file_name) awaiting backThumb
     thumb_pending: HashSet<(u32, String, String)>,
     thumb_failed: HashSet<(u32, String, String)>,
@@ -460,23 +465,21 @@ pub fn nas_put_file(
             "size": file_size,
         })
         .to_string();
+        let rx = crate::tasks::watch_put(session_id);
         let announced = webrpc::send_json_timeout(session_id, &payload, GET_FILE_TIMEOUT_MS);
         if !announced {
             eprintln!("webrpc: putFile send timeout session={session_id} path={dir} name={name}");
+            drop(rx);
+            crate::tasks::cancel_put_watch(session_id);
             emit_nas_put(session_id, name, dir, false);
             return;
         }
-        if file_size == 0 {
+        if file_size > 0 {
             thread::sleep(Duration::from_millis(80));
-            eprintln!("webrpc: nas put empty session={session_id} path={dir} name={name}");
-            emit_nas_put(session_id, name, dir, true);
-            return;
+            let _ = webrpc::send_local_file(session_id, &out.to_string_lossy());
         }
-        thread::sleep(Duration::from_millis(80));
-        let ok = webrpc::send_local_file(session_id, &out.to_string_lossy()) == 1;
-        eprintln!(
-            "webrpc: nas put session={session_id} path={dir} name={name} ok={ok}"
-        );
+        let ok = crate::tasks::confirm_put(session_id, &dir, &name, file_size, rx).is_ok();
+        eprintln!("webrpc: nas put session={session_id} path={dir} name={name} ok={ok}");
         emit_nas_put(session_id, name, dir, ok);
     });
 }
@@ -589,12 +592,17 @@ pub fn emit_back_path(session_id: u32, data: &serde_json::Value, path: &str) {
         return;
     }
     let mut entries = Vec::new();
+    let mut listed = Vec::new();
     if let Some(obj) = data.as_object() {
         for (name, flag) in obj {
-            if name.is_empty() || name.starts_with('.') || !flag.is_object() {
+            if name.is_empty() || !flag.is_object() {
                 continue;
             }
-            entries.push(parse_path_item(name, flag));
+            let item = parse_path_item(name, flag);
+            listed.push(item.clone());
+            if !name.starts_with('.') {
+                entries.push(item);
+            }
         }
     }
     entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
@@ -603,6 +611,7 @@ pub fn emit_back_path(session_id: u32, data: &serde_json::Value, path: &str) {
         _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
     });
     let dir = resolve_list_path(session_id, path);
+    deliver_list_wait(session_id, &dir, &listed);
     let (force, is_browse) = {
         let mut g = lock();
         let force = g.force_list.remove(&session_id);
@@ -944,6 +953,89 @@ fn json_i64(value: &serde_json::Value) -> Option<i64> {
         .or_else(|| value.as_u64().and_then(|n| i64::try_from(n).ok()))
 }
 
+fn deliver_list_wait(session_id: u32, dir: &str, entries: &[NasEntry]) {
+    let tx = {
+        let mut g = lock();
+        let hit = g
+            .list_wait
+            .as_ref()
+            .map(|(sid, want, _)| *sid == session_id && want == dir)
+            .unwrap_or(false);
+        if hit {
+            g.list_wait.take().map(|(_, _, tx)| tx)
+        } else {
+            None
+        }
+    };
+    if let Some(tx) = tx {
+        let _ = tx.send(entries.to_vec());
+    }
+}
+
+/// List `dir` once and return the size of `name`. Retries are the caller's job.
+pub fn file_size_listed(session_id: u32, dir: &str, name: &str) -> Result<u64, String> {
+    if session_id == 0 {
+        return Err("目录核对失败".into());
+    }
+    let dir = normalize_path(dir);
+    let (tx, rx) = mpsc::channel();
+    {
+        let mut g = lock();
+        g.list_wait = Some((session_id, dir.clone(), tx));
+        g.force_list.insert(session_id);
+        g.last_lists.remove(&(session_id, dir.clone()));
+    }
+    push_list_path(session_id, &dir);
+    let payload = get_path_payload(&dir);
+    let sent = webrpc::send_json_timeout(session_id, &payload, GET_PATH_TIMEOUT_MS);
+    if !sent {
+        let mut g = lock();
+        g.list_wait = None;
+        return Err("目录核对超时".into());
+    }
+    match rx.recv_timeout(Duration::from_secs(20)) {
+        Ok(entries) => entries
+            .iter()
+            .find(|item| !item.is_dir && item.name == name)
+            .and_then(|item| item.size)
+            .ok_or_else(|| "目录中没有该文件".into()),
+        Err(_) => {
+            let mut g = lock();
+            g.list_wait = None;
+            Err("目录核对超时".into())
+        }
+    }
+}
+
+/// Ask the server to delete one file and wait for backDeleteFile.
+pub fn delete_entry_wait(session_id: u32, dir: &str, name: &str) -> Result<(), String> {
+    if session_id == 0 || name.is_empty() {
+        return Err("删除失败".into());
+    }
+    let dir = normalize_path(dir);
+    let (tx, rx) = mpsc::channel();
+    lock().delete_wait = Some((session_id, tx));
+    let payload = serde_json::json!({
+        "type": "deleteFile",
+        "fileNames": [name],
+        "filePath": dir,
+    })
+    .to_string();
+    let sent = webrpc::send_json_timeout(session_id, &payload, DELETE_TIMEOUT_MS);
+    if !sent {
+        lock().delete_wait = None;
+        return Err("删除失败".into());
+    }
+    match rx.recv_timeout(Duration::from_secs(20)) {
+        Ok(true) => Ok(()),
+        Ok(false) => Ok(()),
+        Err(_) => {
+            lock().delete_wait = None;
+            Err("删除超时".into())
+        }
+    }
+}
+
 fn emit_path_event(session_id: u32, ok: bool, entries: Vec<NasEntry>, path: String) {
     if let Some(app) = webrpc::app_handle() {
         let _ = app.emit(
@@ -1268,6 +1360,22 @@ pub fn emit_back_delete_file(session_id: u32, value: &serde_json::Value) {
         "webrpc: backDeleteFile session={session_id} path={path} count={} ok={ok} error={error}",
         results.len()
     );
+    let tx = {
+        let mut g = lock();
+        let hit = g
+            .delete_wait
+            .as_ref()
+            .map(|(sid, _)| *sid == session_id)
+            .unwrap_or(false);
+        if hit {
+            g.delete_wait.take().map(|(_, tx)| tx)
+        } else {
+            None
+        }
+    };
+    if let Some(tx) = tx {
+        let _ = tx.send(ok);
+    }
     if let Some(app) = webrpc::app_handle() {
         let _ = app.emit(
             "webrpc-nas-delete",
@@ -1803,6 +1911,8 @@ pub fn stop_watch(session_id: u32) {
         g.list_paths.remove(&session_id);
         g.browse_paths.remove(&session_id);
         g.force_list.remove(&session_id);
+        g.list_wait = None;
+        g.delete_wait = None;
         g.last_lists.retain(|(sid, _), _| *sid != session_id);
         g.thumb_pending.retain(|(sid, _, _)| *sid != session_id);
         g.thumb_failed.retain(|(sid, _, _)| *sid != session_id);
