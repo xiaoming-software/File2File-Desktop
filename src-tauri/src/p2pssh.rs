@@ -1,6 +1,13 @@
-//! P2P SSH client: webrpc magic-4 tunnel.
+//! P2P SSH client: webrpc magic-4 tunnel (protocol frozen with p2pssh-server).
 //! - In-app terminal: remote PTY shell channel (no local ssh / no sshd required)
 //! - Optional local TCP port: forwards to remote sshd for external `ssh -p`
+//!
+//! Channel lifecycle (must match server `internal/tunnel/protocol.go`):
+//! 1. Register local receive state for `channel`, then send OpOpen.
+//! 2. Wait OpOpenAck (or OpOpenErr).
+//! 3. Only after Ack, start local→remote OpData pump.
+//! Server never sends OpData before OpOpenAck; client must still register before
+//! OpOpen so Ack/Data interleaving on the callback thread cannot drop the SSH banner.
 
 use crate::storage;
 use crate::webrpc;
@@ -8,6 +15,7 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -16,6 +24,17 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
+
+fn p2p_log(msg: &str) {
+    eprintln!("{msg}");
+    if let Ok(mut f) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/file2file-p2pssh.log")
+    {
+        let _ = writeln!(f, "{msg}");
+    }
+}
 
 const SSH_FILE: &str = "saved_p2pssh.json";
 const MAGIC: [u8; 4] = [0, 0, 0, 4];
@@ -192,31 +211,55 @@ pub(crate) fn is_p2pssh_session(session_id: u32) -> bool {
 }
 
 pub(crate) fn on_binary(session_id: u32, payload: &[u8]) {
-    if decode_frame(payload).is_none() {
+    let Some((op, channel, seq, body)) = decode_frame(payload) else {
         return;
-    }
-    let entry_id = match state().by_session.lock() {
-        Ok(m) => m.get(&session_id).cloned(),
-        Err(_) => None,
     };
-    let Some(entry_id) = entry_id else { return };
+    let mut entry_id = state()
+        .by_session
+        .lock()
+        .ok()
+        .and_then(|m| m.get(&session_id).cloned());
+    // 回调里的 sessionId 偶发与 OpenSession 返回值不一致时，按 channel 找回等待中的隧道。
+    if entry_id.is_none() {
+        if let Some(found) = find_entry_for_channel(channel) {
+            eprintln!(
+                "p2pssh: repair session map callbackId={session_id} entry={found} channel={channel}"
+            );
+            if let Ok(mut by) = state().by_session.lock() {
+                by.insert(session_id, found.clone());
+            }
+            entry_id = Some(found);
+        }
+    }
+    let Some(entry_id) = entry_id else {
+        eprintln!("p2pssh: drop frame op={op} channel={channel} unknown session={session_id}");
+        return;
+    };
     let tunnel = match state().tunnels.lock() {
         Ok(m) => m.get(&entry_id).cloned(),
         Err(_) => None,
     };
     let Some(tunnel) = tunnel else { return };
-    let Some((op, channel, seq, body)) = decode_frame(payload) else {
-        return;
-    };
     match op {
         OP_OPEN_ACK | OP_OPEN_ERR => {
-            // accept loop waits via channel events stored in pending map keyed specially
+            p2p_log(&format!(
+                "p2pssh: open result channel={channel} ok={} session={}",
+                op == OP_OPEN_ACK,
+                session_id
+            ));
             notify_open_result(&tunnel, channel, op == OP_OPEN_ACK, body);
         }
         OP_DATA => on_channel_data(&tunnel, channel, seq, body),
         OP_CLOSE => on_remote_close(&tunnel, channel),
         _ => {}
     }
+}
+
+fn find_entry_for_channel(channel: u32) -> Option<String> {
+    let map = open_waits().lock().ok()?;
+    map.keys()
+        .find(|(_, ch)| *ch == channel)
+        .map(|(entry, _)| entry.clone())
 }
 
 struct OpenWait {
@@ -304,7 +347,13 @@ fn on_channel_data(tunnel: &TunnelRuntime, channel: u32, seq: u32, payload: &[u8
         };
         match map.get(&channel) {
             Some(c) => c.clone(),
-            None => return,
+            None => {
+                p2p_log(&format!(
+                    "p2pssh: drop DATA channel={channel} seq={seq} n={} (not registered)",
+                    payload.len()
+                ));
+                return;
+            }
         }
     };
     if ch.closed.load(Ordering::SeqCst) {
@@ -331,6 +380,8 @@ fn on_channel_data(tunnel: &TunnelRuntime, channel: u32, seq: u32, payload: &[u8
                     return;
                 }
             };
+            // 避免本机 ssh 暂不读时 write_all 永久卡住 webrpc 回调线程。
+            let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
             if stream.write_all(&buf).is_err() {
                 close_channel(tunnel, channel, true);
                 return;
@@ -473,6 +524,61 @@ fn pipe_local_to_remote(tunnel: Arc<TunnelRuntime>, channel: u32, ch: Arc<Channe
     close_channel(&tunnel, channel, true);
 }
 
+fn handle_local_ssh(tunnel: Arc<TunnelRuntime>, stream: TcpStream) {
+    if tunnel.stop.load(Ordering::SeqCst) {
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+    let _ = stream.set_nodelay(true);
+    let channel = tunnel.next_channel.fetch_add(1, Ordering::SeqCst);
+    // 协议步骤 1：先登记再发 OpOpen（见文件头）。否则早到的 sshd banner 会被丢掉。
+    let ch = Arc::new(ChannelState {
+        stream,
+        closed: AtomicBool::new(false),
+        next_out: AtomicU32::new(0),
+        next_in: Mutex::new(0),
+        pending: Mutex::new(HashMap::new()),
+    });
+    {
+        let mut map = match tunnel.channels.lock() {
+            Ok(m) => m,
+            Err(_) => {
+                let _ = ch.stream.shutdown(Shutdown::Both);
+                return;
+            }
+        };
+        map.insert(channel, ch.clone());
+    }
+    let wait = register_open_wait(&tunnel.entry_id, channel);
+    let frame = encode_frame(OP_OPEN, channel, 0, &[]);
+    p2p_log(&format!(
+        "p2pssh: open channel {channel} send (webrpc session {})",
+        tunnel.webrpc_session
+    ));
+    if !send_frame(tunnel.webrpc_session, &frame) {
+        clear_open_wait(&tunnel.entry_id, channel);
+        close_channel(&tunnel, channel, false);
+        p2p_log(&format!("p2pssh: open channel {channel} SendData failed"));
+        return;
+    }
+    if let Err(err) = wait_open_ack(&wait, &tunnel.entry_id, channel) {
+        close_channel(&tunnel, channel, false);
+        p2p_log(&format!(
+            "p2pssh: open channel {channel} failed: {err} (check p2pssh-server and remote sshd)"
+        ));
+        return;
+    }
+    p2p_log(&format!(
+        "p2pssh: channel {channel} open ok (webrpc session {} local :{})",
+        tunnel.webrpc_session, tunnel.local_port
+    ));
+    let t2 = tunnel.clone();
+    thread::Builder::new()
+        .name(format!("p2pssh-ch-{channel}"))
+        .spawn(move || pipe_local_to_remote(t2, channel, ch))
+        .ok();
+}
+
 fn accept_loop(tunnel: Arc<TunnelRuntime>, listener: TcpListener) {
     let _ = listener.set_nonblocking(false);
     while !tunnel.stop.load(Ordering::SeqCst) {
@@ -482,43 +588,15 @@ fn accept_loop(tunnel: Arc<TunnelRuntime>, listener: TcpListener) {
                     let _ = stream.shutdown(Shutdown::Both);
                     break;
                 }
-                let _ = stream.set_nodelay(true);
-                let channel = tunnel.next_channel.fetch_add(1, Ordering::SeqCst);
-                // Register waiter before SendData so a fast OPEN_ACK cannot be dropped.
-                let wait = register_open_wait(&tunnel.entry_id, channel);
-                let frame = encode_frame(OP_OPEN, channel, 0, &[]);
-                if !send_frame(tunnel.webrpc_session, &frame) {
-                    clear_open_wait(&tunnel.entry_id, channel);
-                    let _ = stream.shutdown(Shutdown::Both);
-                    eprintln!("p2pssh: open channel {channel} SendData failed");
-                    continue;
-                }
-                if let Err(err) = wait_open_ack(&wait, &tunnel.entry_id, channel) {
-                    eprintln!(
-                        "p2pssh: open channel {channel} failed: {err} (check p2pssh-server and remote sshd)"
-                    );
-                    let _ = stream.shutdown(Shutdown::Both);
-                    continue;
-                }
-                eprintln!(
-                    "p2pssh: channel {channel} open ok (webrpc session {} local :{})",
-                    tunnel.webrpc_session, tunnel.local_port
-                );
-                let ch = Arc::new(ChannelState {
-                    stream,
-                    closed: AtomicBool::new(false),
-                    next_out: AtomicU32::new(0),
-                    next_in: Mutex::new(0),
-                    pending: Mutex::new(HashMap::new()),
-                });
-                if let Ok(mut map) = tunnel.channels.lock() {
-                    map.insert(channel, ch.clone());
-                }
+                // 等 OPEN_ACK 不能占用 accept 线程，否则一次失败会堵住后续 ssh -p。
                 let t2 = tunnel.clone();
-                thread::Builder::new()
-                    .name(format!("p2pssh-ch-{channel}"))
-                    .spawn(move || pipe_local_to_remote(t2, channel, ch))
-                    .ok();
+                if thread::Builder::new()
+                    .name("p2pssh-open".into())
+                    .spawn(move || handle_local_ssh(t2, stream))
+                    .is_err()
+                {
+                    eprintln!("p2pssh: spawn open worker failed");
+                }
             }
             Err(_) => {
                 if tunnel.stop.load(Ordering::SeqCst) {
@@ -855,17 +933,6 @@ pub fn p2pssh_term_open(id: String, cols: u16, rows: u16) -> Result<String, Stri
         tunnel.webrpc_session
     );
 
-    let wait = register_open_wait(&tunnel.entry_id, channel);
-    let frame = encode_frame(OP_OPEN, channel, 0, OPEN_SHELL);
-    if !send_frame(tunnel.webrpc_session, &frame) {
-        clear_open_wait(&tunnel.entry_id, channel);
-        return Err("open-send-failed".into());
-    }
-    if let Err(err) = wait_open_ack(&wait, &tunnel.entry_id, channel) {
-        eprintln!("p2pssh: shell_open channel={channel} failed: {err}");
-        return Err(format!("remote shell open failed: {err}"));
-    }
-
     let term_id = now_id("term");
     let shell = Arc::new(ShellChannel {
         term_id: term_id.clone(),
@@ -874,18 +941,35 @@ pub fn p2pssh_term_open(id: String, cols: u16, rows: u16) -> Result<String, Stri
         next_in: Mutex::new(0),
         pending: Mutex::new(HashMap::new()),
     });
-    if let Ok(mut map) = tunnel.shells.lock() {
+    // 协议步骤 1：先登记再发 OpOpen。
+    {
+        let mut map = tunnel
+            .shells
+            .lock()
+            .map_err(|_| "shell-map-lock".to_string())?;
         map.insert(channel, shell);
     }
-
     let runtime = Arc::new(TermRuntime {
-        entry_id: id,
+        entry_id: id.clone(),
         channel,
         webrpc_session: tunnel.webrpc_session,
         stop: Arc::new(AtomicBool::new(false)),
     });
     if let Ok(mut map) = state().terms.lock() {
         map.insert(term_id.clone(), runtime);
+    }
+
+    let wait = register_open_wait(&tunnel.entry_id, channel);
+    let frame = encode_frame(OP_OPEN, channel, 0, OPEN_SHELL);
+    if !send_frame(tunnel.webrpc_session, &frame) {
+        clear_open_wait(&tunnel.entry_id, channel);
+        let _ = close_shell_channel(&tunnel, channel, false);
+        return Err("open-send-failed".into());
+    }
+    if let Err(err) = wait_open_ack(&wait, &tunnel.entry_id, channel) {
+        eprintln!("p2pssh: shell_open channel={channel} failed: {err}");
+        let _ = close_shell_channel(&tunnel, channel, false);
+        return Err(format!("remote shell open failed: {err}"));
     }
 
     let resize = encode_frame(OP_RESIZE, channel, 0, &encode_resize(cols, rows));
@@ -980,3 +1064,4 @@ fn term_close_inner(term_id: &str) -> Result<(), String> {
     }
     Ok(())
 }
+

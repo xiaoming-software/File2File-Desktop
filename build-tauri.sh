@@ -36,6 +36,9 @@ sync_ui() {
   if [[ -d "${PROJECT_ROOT}/vendor/xterm" ]]; then
     cp -f "${PROJECT_ROOT}/vendor/xterm/"* "${UI_DIR}/vendor/xterm/"
   fi
+  if [[ -f "${PROJECT_ROOT}/vendor/qrcode.min.js" ]]; then
+    cp -f "${PROJECT_ROOT}/vendor/qrcode.min.js" "${UI_DIR}/vendor/qrcode.min.js"
+  fi
   if [[ -f "${ASSETS_DIR}/file2file_logo.png" ]]; then
     cp -f "${ASSETS_DIR}/file2file_logo.png" "${UI_DIR}/assets/file2file_logo.png"
   fi

@@ -43,6 +43,9 @@ prepare_frontend() {
   if [[ -d "${PROJECT_ROOT}/vendor/xterm" ]]; then
     cp -f "${PROJECT_ROOT}/vendor/xterm/"* "${ui_dir}/vendor/xterm/"
   fi
+  if [[ -f "${PROJECT_ROOT}/vendor/qrcode.min.js" ]]; then
+    cp -f "${PROJECT_ROOT}/vendor/qrcode.min.js" "${ui_dir}/vendor/qrcode.min.js"
+  fi
   if [[ -f "${PROJECT_ROOT}/assets/file2file_logo.png" ]]; then
     cp -f "${PROJECT_ROOT}/assets/file2file_logo.png" "${ui_dir}/assets/file2file_logo.png"
   fi

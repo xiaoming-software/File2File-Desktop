@@ -244,6 +244,12 @@
   const connectPeerPass = document.getElementById("connect-peer-pass");
   const connectBtn = document.getElementById("btn-connect");
   const connectError = document.getElementById("connect-error");
+  const connectDriveQr = document.getElementById("connect-drive-qr");
+  const btnConnectDriveQr = document.getElementById("btn-connect-drive-qr");
+  const connectDriveQrBox = document.getElementById("connect-drive-qr-box");
+  const btnAccountQr = document.getElementById("btn-account-qr");
+  const accountQrBox = document.getElementById("account-qr-box");
+  const btnNasQr = document.getElementById("btn-nas-qr");
   const chatTitle = document.getElementById("chat-title");
   const chatSubtitle = document.getElementById("chat-subtitle");
   const chatStatusDot = document.getElementById("chat-status-dot");
@@ -258,6 +264,11 @@
   const modalNew = document.getElementById("modal-new-session");
   const modalRemark = document.getElementById("modal-remark");
   const modalConfirm = document.getElementById("modal-confirm");
+  const modalPeerQr = document.getElementById("modal-peer-qr");
+  const peerQrTitle = document.getElementById("peer-qr-title");
+  const peerQrLead = document.getElementById("peer-qr-lead");
+  const peerQrToken = document.getElementById("peer-qr-token");
+  const peerQrModalBox = document.getElementById("peer-qr-modal-box");
   const confirmTitle = document.getElementById("confirm-title");
   const confirmDesc = document.getElementById("confirm-desc");
   const confirmFailList = document.getElementById("confirm-fail-list");
@@ -1919,6 +1930,7 @@
       (!modalNewP2pssh || modalNewP2pssh.hidden) &&
       modalRemark.hidden &&
       modalConfirm.hidden &&
+      (!modalPeerQr || modalPeerQr.hidden) &&
       (!modalNasCreate || modalNasCreate.hidden) &&
       (!modalNasMove || modalNasMove.hidden) &&
       (!modalNasZip || modalNasZip.hidden)
@@ -7499,6 +7511,12 @@
     if (infoAccountRemark) {
       infoAccountRemark.addEventListener("click", openAccountRemark);
     }
+    if (btnAccountQr) {
+      btnAccountQr.addEventListener("click", function () {
+        if (btnAccountQr.classList.contains("is-disabled")) return;
+        openAccountQrModal();
+      });
+    }
     document.getElementById("btn-new-session").addEventListener("click", function () {
       openModal("new");
     });
@@ -7521,6 +7539,38 @@
     document.getElementById("btn-save-remark").addEventListener("click", saveRemark);
     confirmOkBtn.addEventListener("click", onConfirmOk);
     connectBtn.addEventListener("click", connectSelected);
+    if (btnConnectDriveQr) {
+      btnConnectDriveQr.addEventListener("click", function () {
+        const session = findItem(state.selectedId);
+        if (!session || !isDrive(session)) return;
+        openPeerQrModal({
+          token: session.peerToken,
+          permission: connectPeerPass
+            ? connectPeerPass.value.trim()
+            : session.peerPass || "",
+          title: t("网盘二维码"),
+        });
+      });
+    }
+    if (connectPeerPass) {
+      connectPeerPass.addEventListener("input", function () {
+        const session = findItem(state.selectedId);
+        if (session && isDrive(session) && !session.connected) {
+          updateConnectDriveQr(session);
+        }
+      });
+    }
+    if (btnNasQr) {
+      btnNasQr.addEventListener("click", function () {
+        const session = findItem(state.selectedId);
+        if (!session || !isDrive(session)) return;
+        openPeerQrModal({
+          token: session.peerToken,
+          permission: session.peerPass || "",
+          title: t("网盘二维码"),
+        });
+      });
+    }
     document.getElementById("btn-voice").addEventListener("click", startVoiceCall);
     document.getElementById("btn-voice-caret").addEventListener("click", toggleVoiceCallMenu);
     document.getElementById("btn-vcall").addEventListener("click", startVcall);
@@ -7782,6 +7832,22 @@
     if (!row) return;
     const id = row.getAttribute("data-id");
     const gear = event.target.closest(".session-gear");
+    const qrBtn = event.target.closest(".peer-qr-thumb");
+
+    if (qrBtn) {
+      event.stopPropagation();
+      const session = findItem(id);
+      if (!session || !isDrive(session)) return;
+      selectSession(id);
+      state.menuSessionId = null;
+      renderWorkspace();
+      openPeerQrModal({
+        token: session.peerToken,
+        permission: session.peerPass || "",
+        title: t("网盘二维码"),
+      });
+      return;
+    }
 
     if (gear) {
       event.stopPropagation();
@@ -7831,6 +7897,106 @@
     }
   }
 
+  /** Peer / 会话连接二维码：与 App、网盘一致，仅用 token + permission（勿用 password）。 */
+  function encodePeerQrPayload(token, permission) {
+    return JSON.stringify({
+      token: String(token || ""),
+      permission: String(permission || ""),
+    });
+  }
+
+  function clearQrBox(el) {
+    if (el) el.innerHTML = "";
+  }
+
+  function mountQrBox(el, text, size) {
+    if (!el) return false;
+    clearQrBox(el);
+    const payload = String(text || "");
+    if (!payload || typeof QRCode === "undefined") return false;
+    try {
+      new QRCode(el, {
+        text: payload,
+        width: size,
+        height: size,
+        correctLevel: QRCode.CorrectLevel.M,
+      });
+      return true;
+    } catch (err) {
+      console.error("QRCode render failed", err);
+      return false;
+    }
+  }
+
+  function openPeerQrModal(opts) {
+    opts = opts || {};
+    const token = String(opts.token || "").trim();
+    const permission = String(opts.permission || "");
+    if (!token) return;
+    openModal("peer-qr");
+    if (peerQrTitle) peerQrTitle.textContent = opts.title || t("连接二维码");
+    if (peerQrLead) {
+      peerQrLead.textContent = t("用 File2File App 扫码即可填入 Token 与口令");
+    }
+    if (peerQrToken) peerQrToken.textContent = token;
+    mountQrBox(peerQrModalBox, encodePeerQrPayload(token, permission), 220);
+  }
+
+  function openAccountQrModal() {
+    if (!state.user || !state.user.token) return;
+    const pass = String(state.user.passphrase || "").trim();
+    if (!pass) return;
+    openPeerQrModal({
+      token: state.user.token,
+      permission: pass,
+      title: t("我的二维码"),
+    });
+  }
+
+  function renderAccountQr() {
+    if (!btnAccountQr || !accountQrBox) return;
+    const token = state.user && state.user.token;
+    const pass = state.user && String(state.user.passphrase || "").trim();
+    if (!token || !pass) {
+      btnAccountQr.classList.add("is-disabled");
+      btnAccountQr.setAttribute("title", t("请先设置认证口令后再生成二维码"));
+      btnAccountQr.setAttribute("aria-label", t("请先设置认证口令后再生成二维码"));
+      clearQrBox(accountQrBox);
+      return;
+    }
+    btnAccountQr.classList.remove("is-disabled");
+    btnAccountQr.setAttribute("title", t("我的二维码"));
+    btnAccountQr.setAttribute("aria-label", t("我的二维码"));
+    mountQrBox(accountQrBox, encodePeerQrPayload(token, pass), 44);
+  }
+
+  function mountDriveListQrs(el) {
+    if (!el) return;
+    el.querySelectorAll(".peer-qr-thumb").forEach(function (btn) {
+      const row = btn.closest(".session-row");
+      const id = row && row.getAttribute("data-id");
+      const session = findItem(id);
+      const box = btn.querySelector(".peer-qr-box");
+      if (!session || !box) return;
+      mountQrBox(box, encodePeerQrPayload(session.peerToken, session.peerPass || ""), 30);
+    });
+  }
+
+  function updateConnectDriveQr(session) {
+    if (!connectDriveQr || !connectDriveQrBox) return;
+    if (!session || !isDrive(session)) {
+      connectDriveQr.hidden = true;
+      clearQrBox(connectDriveQrBox);
+      return;
+    }
+    connectDriveQr.hidden = false;
+    const pass =
+      connectPeerPass && state.connectFillId === session.id
+        ? connectPeerPass.value.trim()
+        : session.peerPass || "";
+    mountQrBox(connectDriveQrBox, encodePeerQrPayload(session.peerToken, pass), 120);
+  }
+
   function renderAccount() {
     if (!state.user) return;
     infoToken.textContent = state.user.token;
@@ -7840,6 +8006,7 @@
     renderAccountRemark();
     infoSessionCount.textContent = String(state.sdkSessionCount);
     updatePortalManageButton();
+    renderAccountQr();
   }
 
   function renderWorkspace() {
@@ -7877,6 +8044,7 @@
       showClear: false,
       glyph: "drive",
     });
+    mountDriveListQrs(driveListEl);
   }
 
   function renderP2pSshList() {
@@ -7928,6 +8096,14 @@
           '"></span><i class="status-dot' +
           on +
           '"></i></span>';
+        const qrBtn =
+          opts.glyph === "drive"
+            ? '<button type="button" class="peer-qr-thumb" data-action="peer-qr" title="' +
+              escapeHtml(t("放大二维码")) +
+              '" aria-label="' +
+              escapeHtml(t("放大二维码")) +
+              '"><span class="peer-qr-box" aria-hidden="true"></span></button>'
+            : "";
         return (
           '<div class="session-row' +
           (menuOpen ? " is-menu-open" : "") +
@@ -7947,6 +8123,7 @@
           escapeHtml(sub) +
           "</span>" +
           "</div>" +
+          qrBtn +
           '<button class="session-gear" type="button" aria-label="' + t("设置") + '">⚙</button>' +
           "</div>" +
           menu +
@@ -7977,6 +8154,7 @@
     const session = findItem(state.selectedId);
     if (!session) {
       showPanel("unselected");
+      updateConnectDriveQr(null);
       return;
     }
 
@@ -8036,6 +8214,7 @@
         connectError.hidden = true;
       }
       connectPeer.setAttribute("title", name);
+      updateConnectDriveQr(session);
       return;
     }
 
@@ -8647,10 +8826,12 @@
     if (modalNewP2pssh) modalNewP2pssh.hidden = name !== "new-p2pssh";
     modalRemark.hidden = name !== "remark";
     modalConfirm.hidden = name !== "confirm";
+    if (modalPeerQr) modalPeerQr.hidden = name !== "peer-qr";
     if (modalNasCreate) modalNasCreate.hidden = name !== "nas-create";
     if (modalNasMove) modalNasMove.hidden = name !== "nas-move";
     if (modalNasZip) modalNasZip.hidden = name !== "nas-zip";
     if (name !== "nas-move") resetNasMovePicker();
+    if (name !== "peer-qr") clearQrBox(peerQrModalBox);
     newSessionError.hidden = true;
     if (newDriveError) newDriveError.hidden = true;
     if (newP2psshError) newP2psshError.hidden = true;
@@ -8727,6 +8908,8 @@
     if (modalNewP2pssh) modalNewP2pssh.hidden = true;
     modalRemark.hidden = true;
     modalConfirm.hidden = true;
+    if (modalPeerQr) modalPeerQr.hidden = true;
+    clearQrBox(peerQrModalBox);
     if (modalNasCreate) modalNasCreate.hidden = true;
     if (modalNasMove) modalNasMove.hidden = true;
     if (modalNasZip) modalNasZip.hidden = true;

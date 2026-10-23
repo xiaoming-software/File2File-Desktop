@@ -740,7 +740,9 @@ pub(crate) fn confirm_put(
     size: u64,
     rx: mpsc::Receiver<PutDone>,
 ) -> Result<u64, String> {
-    let done = match rx.recv_timeout(Duration::from_secs(30)) {
+    // 大文件服务端收尾可能较慢；超时按体积放宽，避免误删已写完的远端文件。
+    let wait_secs = 60u64.saturating_add(size / (2 * 1024 * 1024)).min(600);
+    let done = match rx.recv_timeout(Duration::from_secs(wait_secs)) {
         Ok(item) => item,
         Err(_) => {
             lock().put_wait.remove(&session_id);
@@ -757,24 +759,25 @@ pub(crate) fn confirm_put(
         };
         return Err(format!("上传校验失败: {why}"));
     }
-    let mut last_err = String::from("目录核对失败");
-    for attempt in 0..4 {
-        if attempt > 0 {
-            thread::sleep(Duration::from_millis(400));
+    // backPut 已核对字节后，目录列表只做一次轻量复核，避免再刷多轮 getPath。
+    if !transfer_alive(session_id) {
+        return Err(FAIL_CLOSED.into());
+    }
+    match nas::file_size_listed(session_id, dir, name) {
+        Ok(listed) if listed == size => Ok(size),
+        Ok(listed) => {
+            let _ = nas::delete_entry_wait(session_id, dir, name);
+            Err(format!("目录核对失败: 目录大小 {listed} 与本地 {size} 不一致"))
         }
-        if !transfer_alive(session_id) {
-            return Err(FAIL_CLOSED.into());
+        Err(err) if err.contains("超时") => {
+            // 列表超时不能证明文件损坏，信任已成功的 backPut。
+            Ok(size)
         }
-        match nas::file_size_listed(session_id, dir, name) {
-            Ok(listed) if listed == size => return Ok(size),
-            Ok(listed) => last_err = format!("目录大小 {listed} 与本地 {size} 不一致"),
-            Err(err) => last_err = err,
+        Err(err) => {
+            let _ = nas::delete_entry_wait(session_id, dir, name);
+            Err(format!("目录核对失败: {err}"))
         }
     }
-    if !last_err.contains("超时") {
-        let _ = nas::delete_entry_wait(session_id, dir, name);
-    }
-    Err(format!("目录核对失败: {last_err}"))
 }
 
 pub fn on_upload_ack(session_id: u32, _file_name: &str, bytes: u64) {

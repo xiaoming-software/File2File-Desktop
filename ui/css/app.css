@@ -1010,6 +1010,192 @@ html.is-tauri .titlebar {
   cursor: wait;
 }
 
+.account-item-qr {
+  padding: 0 12px;
+}
+
+.account-qr-btn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border: 1px solid #d7dee7;
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+  color: var(--text);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.account-qr-btn:hover:not(.is-disabled) {
+  border-color: rgba(14, 159, 110, 0.45);
+  box-shadow: 0 0 0 3px rgba(14, 159, 110, 0.12);
+}
+
+.account-qr-btn.is-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: #f3f5f8;
+}
+
+.account-qr-box {
+  display: block;
+  width: 44px;
+  height: 44px;
+  line-height: 0;
+  background: #fff;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.account-qr-box img,
+.account-qr-box canvas,
+.account-qr-box table {
+  display: block;
+  width: 44px !important;
+  height: 44px !important;
+}
+
+/* qrcode.js 转成 img 后会隐藏 canvas；勿用 display:!important 顶掉 */
+.account-qr-box canvas {
+  display: none;
+}
+
+.account-qr-caption {
+  font-size: 10px;
+  font-weight: 650;
+  color: #0e9f6e;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.account-qr-btn.is-disabled .account-qr-caption {
+  color: var(--text-muted);
+}
+
+.peer-qr-thumb {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  padding: 2px;
+  border: 1px solid #d7dee7;
+  border-radius: 7px;
+  background: #fff;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.peer-qr-thumb:hover {
+  border-color: rgba(14, 159, 110, 0.5);
+}
+
+.peer-qr-thumb .peer-qr-box {
+  display: block;
+  width: 30px;
+  height: 30px;
+  overflow: hidden;
+}
+
+.peer-qr-thumb .peer-qr-box img,
+.peer-qr-thumb .peer-qr-box canvas,
+.peer-qr-thumb .peer-qr-box table {
+  display: block;
+  width: 30px !important;
+  height: 30px !important;
+}
+
+.peer-qr-thumb .peer-qr-box canvas {
+  display: none;
+}
+
+.connect-drive-qr {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.connect-drive-qr-btn {
+  padding: 10px;
+  border: 1px solid #d7dee7;
+  border-radius: 14px;
+  background: #fff;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.connect-drive-qr-btn:hover {
+  border-color: rgba(14, 159, 110, 0.5);
+  box-shadow: 0 0 0 3px rgba(14, 159, 110, 0.1);
+}
+
+.connect-drive-qr-box {
+  display: block;
+  width: 120px;
+  height: 120px;
+  overflow: hidden;
+}
+
+.connect-drive-qr-box img,
+.connect-drive-qr-box canvas,
+.connect-drive-qr-box table {
+  display: block;
+  width: 120px !important;
+  height: 120px !important;
+}
+
+.connect-drive-qr-box canvas {
+  display: none;
+}
+
+.connect-drive-qr-tip {
+  margin: 0;
+  max-width: 260px;
+  text-align: center;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.modal-peer-qr {
+  max-width: 360px;
+  text-align: center;
+}
+
+.peer-qr-token {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.peer-qr-modal-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+  margin: 0 auto 16px;
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid #e5eaf0;
+  overflow: hidden;
+  line-height: 0;
+}
+
+.peer-qr-modal-box img,
+.peer-qr-modal-box canvas,
+.peer-qr-modal-box table {
+  display: block;
+  width: 220px !important;
+  height: 220px !important;
+}
+
+.peer-qr-modal-box canvas {
+  display: none;
+}
+
 .account-status {
   display: flex;
   align-items: center;

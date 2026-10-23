@@ -6,6 +6,7 @@
   <title>File2File</title>
   <link rel="stylesheet" href="css/app.css" />
   <link rel="stylesheet" href="vendor/xterm/xterm.css" />
+  <script src="vendor/qrcode.min.js"></script>
 </head>
 <body>
   <div class="desktop">
@@ -197,6 +198,20 @@
               <span class="account-label" data-i18n="当前连接会话">当前连接会话</span>
               <span class="account-value" id="info-session-count">0</span>
             </div>
+            <div class="account-item account-item-qr">
+              <button
+                type="button"
+                class="account-qr-btn is-disabled"
+                id="btn-account-qr"
+                data-i18n-title="我的二维码"
+                title="我的二维码"
+                data-i18n-aria="我的二维码"
+                aria-label="我的二维码"
+              >
+                <span class="account-qr-box" id="account-qr-box" aria-hidden="true"></span>
+                <span class="account-qr-caption" data-i18n="扫码加我">扫码加我</span>
+              </button>
+            </div>
             <div class="lang-switch" role="group" aria-label="Language">
               <button type="button" class="lang-switch-btn" data-lang="zh">中文</button>
               <button type="button" class="lang-switch-btn" data-lang="en">English</button>
@@ -279,6 +294,14 @@
                     </div>
                   </label>
                   <button class="btn-primary btn-connect" id="btn-connect" type="button" data-i18n="连接">连接</button>
+                  <div class="connect-drive-qr" id="connect-drive-qr" hidden>
+                    <button type="button" class="connect-drive-qr-btn" id="btn-connect-drive-qr" data-i18n-title="放大二维码" title="放大二维码">
+                      <span class="connect-drive-qr-box" id="connect-drive-qr-box" aria-hidden="true"></span>
+                    </button>
+                    <p class="connect-drive-qr-tip" data-i18n="手机 App 扫码可快速填入此网盘 Token 与口令">
+                      手机 App 扫码可快速填入此网盘 Token 与口令
+                    </p>
+                  </div>
                   <p class="connect-error" id="connect-error" hidden data-i18n="连接失败。请确认对方 Token 是否在线，以及当前网络是否可达。">
                     连接失败。请确认对方 Token 是否在线，以及当前网络是否可达。
                   </p>
@@ -296,6 +319,16 @@
                     </div>
                   </div>
                   <div class="nas-head-actions">
+                    <button
+                      type="button"
+                      class="nas-head-btn nas-qr-btn"
+                      id="btn-nas-qr"
+                      data-i18n-title="网盘二维码"
+                      title="网盘二维码"
+                      data-i18n="二维码"
+                    >
+                      二维码
+                    </button>
                     <button type="button" class="nas-head-btn" id="nas-upload" data-i18n="上传">上传</button>
                     <button type="button" class="nas-head-btn" id="nas-task-toggle">
                       <span data-i18n="任务">任务</span>
@@ -565,6 +598,17 @@
           <div class="modal-actions">
             <button type="button" class="btn-ghost" data-close-modal data-i18n="取消">取消</button>
             <button type="button" class="btn-primary" id="btn-save-remark" data-i18n="保存">保存</button>
+          </div>
+        </div>
+        <div class="modal modal-peer-qr" id="modal-peer-qr" hidden>
+          <h3 id="peer-qr-title" data-i18n="连接二维码">连接二维码</h3>
+          <p class="modal-desc" id="peer-qr-lead" data-i18n="用 File2File App 扫码即可填入 Token 与口令">
+            用 File2File App 扫码即可填入 Token 与口令
+          </p>
+          <p class="peer-qr-token mono" id="peer-qr-token"></p>
+          <div class="peer-qr-modal-box" id="peer-qr-modal-box" aria-hidden="true"></div>
+          <div class="modal-actions">
+            <button type="button" class="btn-primary" data-close-modal data-i18n="关闭">关闭</button>
           </div>
         </div>
         <div class="modal" id="modal-confirm" hidden>

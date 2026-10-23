@@ -204,9 +204,15 @@ pub fn emit_back_file(session_id: u32, file_name: &str, file_path: &str) {
     };
     thread::spawn(move || {
         let ok = wait_for_nas_cache(&dest, expected, NAS_FILE_WAIT);
-        let current = lock().pending.get(&session_id).map(|item| item.epoch);
-        if epoch != 0 && current != Some(epoch) {
-            return;
+        {
+            let mut g = lock();
+            let current = g.pending.get(&session_id).map(|item| item.epoch);
+            if epoch != 0 && current != Some(epoch) {
+                return;
+            }
+            if epoch != 0 {
+                g.pending.remove(&session_id);
+            }
         }
         let local = dest.to_string_lossy().into_owned();
         let ok = ok && dest.is_file();
@@ -244,36 +250,30 @@ fn wait_for_nas_cache(path: &std::path::Path, expected: Option<u64>, timeout: Du
     let mut last_len: Option<u64> = None;
     let mut stable = 0u32;
     while Instant::now() < deadline {
-        if cache_ready(path, expected) {
-            return true;
-        }
-        if expected.is_none() {
-            if let Ok(meta) = std::fs::metadata(path) {
-                if meta.is_file() && meta.len() > 0 {
-                    if last_len == Some(meta.len()) {
-                        stable = stable.saturating_add(1);
-                        if stable >= 4 {
-                            return true;
-                        }
-                    } else {
-                        stable = 0;
-                        last_len = Some(meta.len());
+        if let Some(n) = expected {
+            if cache_ready(path, Some(n)) {
+                return true;
+            }
+        } else if let Ok(meta) = std::fs::metadata(path) {
+            // size 未知时只能等长度短暂稳定，不能把「已有任意字节」当成完成。
+            if meta.is_file() && meta.len() > 0 {
+                if last_len == Some(meta.len()) {
+                    stable = stable.saturating_add(1);
+                    if stable >= 8 {
+                        return true;
                     }
+                } else {
+                    stable = 0;
+                    last_len = Some(meta.len());
                 }
             }
         }
         thread::sleep(Duration::from_millis(100));
     }
-    if expected == Some(0) {
-        return path.is_file()
-            && std::fs::metadata(path)
-                .map(|meta| meta.len() == 0)
-                .unwrap_or(false);
+    match expected {
+        Some(n) => cache_ready(path, Some(n)),
+        None => false,
     }
-    path.is_file()
-        && std::fs::metadata(path)
-            .map(|meta| meta.len() > 0)
-            .unwrap_or(false)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -372,7 +372,8 @@ fn cache_ready(path: &std::path::Path, expected: Option<u64>) -> bool {
     }
     match expected {
         Some(n) => meta.len() == n,
-        None => meta.len() > 0,
+        // 没有宣称大小时无法判定完整性，避免把半截文件当缓存命中。
+        None => false,
     }
 }
 
@@ -641,9 +642,13 @@ pub fn emit_back_path(session_id: u32, data: &serde_json::Value, path: &str) {
         entries.len()
     );
     emit_path_event(session_id, true, entries.clone(), dir.clone());
-    if is_browse {
+    if is_browse && !session_network_busy(session_id) {
         prefetch_thumbs(session_id, &dir, &entries);
     }
+}
+
+fn session_network_busy(session_id: u32) -> bool {
+    crate::tasks::is_session_busy(session_id) || recv_inflight(session_id)
 }
 
 fn can_thumb_name(name: &str) -> bool {
@@ -715,6 +720,9 @@ fn prefetch_thumbs(session_id: u32, dir: &str, entries: &[NasEntry]) {
 
 fn request_thumb(session_id: u32, dir: &str, name: &str) {
     if session_id == 0 {
+        return;
+    }
+    if session_network_busy(session_id) {
         return;
     }
     let dir = normalize_path(dir);
@@ -1956,15 +1964,21 @@ fn watch_loop(session_id: u32, epoch: u64) {
         if gen_of(session_id) != epoch {
             return;
         }
-        webrpc::send_json_timeout(session_id, GET_NAS_INFO, NAS_SEND_TIMEOUT_MS);
-        if primed {
-            let browse = lock()
-                .browse_paths
-                .get(&session_id)
-                .cloned()
-                .unwrap_or_else(|| "/".into());
-            request_path_ex(session_id, &browse, false, false);
-        } else {
+        // 大文件上下传时不要再刷目录/磁盘信息/缩略图，避免抢信道拖垮 Windows WiFi。
+        let busy = session_network_busy(session_id);
+        if !busy {
+            webrpc::send_json_timeout(session_id, GET_NAS_INFO, NAS_SEND_TIMEOUT_MS);
+            if primed {
+                let browse = lock()
+                    .browse_paths
+                    .get(&session_id)
+                    .cloned()
+                    .unwrap_or_else(|| "/".into());
+                request_path_ex(session_id, &browse, false, false);
+            } else {
+                primed = true;
+            }
+        } else if !primed {
             primed = true;
         }
         let deadline = Instant::now() + NAS_POLL;
