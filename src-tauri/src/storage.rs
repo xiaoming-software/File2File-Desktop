@@ -415,6 +415,7 @@ enum OfficeKind {
     Pdf,
 }
 
+#[cfg(not(target_os = "windows"))]
 fn office_kind_of(path: &Path) -> OfficeKind {
     let ext = path
         .extension()
@@ -435,11 +436,53 @@ pub fn office_open_file(path: String) -> Result<(), String> {
     if !path.is_file() {
         return Err("file-missing".into());
     }
-    let kind = office_kind_of(&path);
-    match pick_office_app(kind) {
-        Some(app) => spawn_office_app(&app, &path),
-        None => Err("no-office-app".into()),
+    // Windows: always open via shell file association (same as Explorer double-click).
+    // Direct CreateProcess on wps.exe often "succeeds" but never shows a window on newer WPS.
+    #[cfg(target_os = "windows")]
+    {
+        return windows_shell_open(&path);
     }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let kind = office_kind_of(&path);
+        match pick_office_app(kind) {
+            Some(app) => spawn_office_app(&app, &path),
+            None => Err("no-office-app".into()),
+        }
+    }
+}
+
+/// Open with the user's default app for this extension (WPS / Office / etc.).
+#[cfg(target_os = "windows")]
+fn windows_shell_open(path: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let file: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let operation: Vec<u16> = "open".encode_utf16().chain(Some(0)).collect();
+    // >32 means success (ShellExecute legacy rule).
+    let ret = unsafe {
+        ShellExecuteW(
+            HWND(0),
+            PCWSTR(operation.as_ptr()),
+            PCWSTR(file.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    let code = ret.0 as isize;
+    if code > 32 {
+        return Ok(());
+    }
+    // SE_ERR_NOASSOC = 31: no file association registered.
+    if code == 31 {
+        return Err("no-office-app".into());
+    }
+    Err(format!("打开文件失败: shell-open {code}"))
 }
 
 #[tauri::command]
@@ -500,6 +543,7 @@ fn copy_office_shared(src: &Path, dest: &Path) -> Result<(), String> {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 enum OfficeApp {
     #[cfg(target_os = "macos")]
     Mac(String),
@@ -507,21 +551,19 @@ enum OfficeApp {
     Exe(PathBuf),
 }
 
+#[cfg(not(target_os = "windows"))]
 fn pick_office_app(kind: OfficeKind) -> Option<OfficeApp> {
     #[cfg(target_os = "macos")]
     {
         return pick_macos_office(kind).map(OfficeApp::Mac);
     }
-    #[cfg(target_os = "windows")]
-    {
-        return pick_windows_office(kind).map(OfficeApp::Exe);
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(target_os = "macos"))]
     {
         return pick_linux_office(kind).map(OfficeApp::Exe);
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 fn spawn_office_app(app: &OfficeApp, path: &Path) -> Result<(), String> {
     match app {
         #[cfg(target_os = "macos")]
@@ -594,7 +636,9 @@ fn pick_macos_office(kind: OfficeKind) -> Option<String> {
     None
 }
 
+// Kept for reference / possible future fallback; Windows open now uses ShellExecute.
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 fn pick_windows_office(kind: OfficeKind) -> Option<PathBuf> {
     let wps_name = match kind {
         OfficeKind::Word | OfficeKind::Pdf => "wps.exe",
@@ -700,6 +744,7 @@ fn which_cmd(name: &str) -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 fn find_named_file(root: &Path, names: &[&str], depth: u8) -> Option<PathBuf> {
     if depth == 0 || !root.is_dir() {
         return None;
