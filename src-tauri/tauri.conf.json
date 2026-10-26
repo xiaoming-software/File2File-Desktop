@@ -50,7 +50,9 @@
     ],
     "macOS": {
       "minimumSystemVersion": "11.0",
-      "infoPlist": "Info.plist"
+      "infoPlist": "Info.plist",
+      "entitlements": "Entitlements.plist",
+      "signingIdentity": "Developer ID Application: Mingding Li (B35S9Y7DUX)"
     }
   }
 }
