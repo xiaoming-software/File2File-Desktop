@@ -366,6 +366,8 @@
     sessionsReady: false,
     pendingHellos: [],
     pendingTexts: [],
+    /** Text frames that arrived before hello bound a chat session (by rpc id). */
+    pendingOrphanTexts: [],
     inflightFiles: {},
     sendQueue: [],
     sendActiveId: null,
@@ -397,8 +399,9 @@
     registerPending: null,
   };
 
-  const SIDEBAR_SPLIT_KEY = "file2file.sidebarSplit";
-  const SIDEBAR_SPLIT_MIN = 96;
+  const SIDEBAR_SPLIT_KEY = "file2file.sidebarSplit3";
+  const SIDEBAR_SPLIT_KEY_LEGACY = "file2file.sidebarSplit";
+  const SIDEBAR_SPLIT_MIN = 88;
   const PORTAL_EXPIRY_WARN_DAYS = 7;
   const PORTAL_EXPIRY_REFRESH_MS = 6 * 60 * 60 * 1000;
   const PORTAL_ORDERS_URL = "https://www.webrpc.cn/#orders";
@@ -409,8 +412,9 @@
   const P2PSSH_SERVER_HINT_KEY =
     "若尚未部署 SSH 转发服务端，请先{link}，在目标设备上安装并保持运行。然后输入服务端 webrpc Token；认证口令可留空，连接时仍可修改。";
   const REGISTER_TIMEOUT_MS = 30000;
-  let sidebarSplitRatio = 0.5;
-  let sidebarSplitDragging = false;
+  /** Fractions of available sidebar height for chat / drive; ssh = remainder. */
+  let sidebarSplitRatios = { chat: 0.34, drive: 0.33 };
+  let sidebarSplitDragging = null;
   const NAS_VIEW_KEY = "file2file.nasView";
   let nasViewMode = "list";
 
@@ -472,6 +476,18 @@
         });
         window.__TAURI__.event.listen("webrpc-peer-text", function (event) {
           onPeerText(event.payload || {});
+        });
+        window.__TAURI__.event.listen("webrpc-delivery-ack", function (event) {
+          onDeliveryAck(event.payload || {});
+        });
+        window.__TAURI__.event.listen("webrpc-read-receipt", function (event) {
+          onReadReceipt(event.payload || {});
+        });
+        window.__TAURI__.event.listen("webrpc-chat-ping", function (event) {
+          onChatPing(event.payload || {});
+        });
+        window.__TAURI__.event.listen("webrpc-chat-pong", function (event) {
+          onChatPong(event.payload || {});
         });
         window.__TAURI__.event.listen("webrpc-file-event", function (event) {
           onFileEvent(event.payload || {});
@@ -800,7 +816,7 @@
       return;
     }
     if (!session.connected) {
-      openInfoPrompt(t("无法发送文件"), t("请先连接当前会话，再拖入文件发送。"));
+      openInfoPrompt(t("无法发送文件"), t("会话未连接。请确认对方在线后先连接，再发送。"));
       return;
     }
 
@@ -957,7 +973,7 @@
     if (!filePath) return;
     const session = findSession(state.selectedId);
     if (!session || !session.connected) {
-      openInfoPrompt(t("无法发送截图"), t("当前会话未连接，截图未发送。"));
+      openInfoPrompt(t("无法发送截图"), t("会话未连接。请确认对方在线后先连接，再发送。"));
       return;
     }
     tauriInvoke("file_stat", { path: filePath })
@@ -988,7 +1004,7 @@
       return;
     }
     if (!session.connected || !session.rpcSessionId) {
-      openInfoPrompt(t("无法语音通话"), t("请先连接当前会话，再发起语音通话。"));
+      openInfoPrompt(t("无法语音通话"), t("会话未连接。请确认对方在线后先连接，再发送。"));
       return;
     }
     tauriInvoke("voice_invite", {
@@ -1146,7 +1162,7 @@
       return;
     }
     if (!session.connected || !session.rpcSessionId) {
-      openInfoPrompt(t("无法视频通话"), t("请先连接当前会话，再发起视频通话。"));
+      openInfoPrompt(t("无法视频通话"), t("会话未连接。请确认对方在线后先连接，再发送。"));
       return;
     }
     tauriInvoke("vcall_invite", {
@@ -1354,7 +1370,7 @@
       return;
     }
     if (!session.connected || !session.rpcSessionId) {
-      openInfoPrompt(t("无法远程控制"), t("请先连接当前会话，再发起远程控制。"));
+      openInfoPrompt(t("无法远程控制"), t("会话未连接。请确认对方在线后先连接，再发送。"));
       return;
     }
     tauriInvoke("desktop_invite", { sessionId: session.rpcSessionId }).catch(showDesktopError);
@@ -2442,6 +2458,7 @@
     state.sessionsReady = false;
     state.pendingHellos = [];
     state.pendingTexts = [];
+    state.pendingOrphanTexts = [];
     state.inflightFiles = {};
     applySdkSessionCount(0);
 
@@ -2498,6 +2515,7 @@
     state.sessionsReady = false;
     state.pendingHellos = [];
     state.pendingTexts = [];
+    state.pendingOrphanTexts = [];
     state.inflightFiles = {};
     state.sendQueue = [];
     state.sendActiveId = null;
@@ -2543,6 +2561,10 @@
       connectError: "",
       peerPass: item.peerPass || "",
       rpcSessionId: 0,
+      peerCapsAck: false,
+      peerCapsRead: false,
+      peerChatProto: 0,
+      unreadCount: 0,
       messages: [],
       chatsLoaded: false,
       chatsLoading: null,
@@ -2765,35 +2787,54 @@
       elapsedMs: msg.elapsedMs || 0,
       speedBps: msg.speedBps || 0,
       filePath: msg.filePath || "",
+      seenByMe: msg.from === "me" ? true : !!msg.seenByMe,
+      readReceiptPending:
+        msg.from === "me" ? false : !!msg.readReceiptPending,
     };
   }
 
   function isFileTerminal(status) {
-    return status === "sent" || status === "received" || status === "failed";
+    return status === "sent" || status === "received" || status === "failed" || status === "read";
   }
 
   function isFileSuccess(status) {
-    return status === "sent" || status === "received";
+    return status === "sent" || status === "received" || status === "read";
   }
 
   function finalizeCompleteFile(msg) {
     if (!msg || msg.type === "text") return;
-    if (!isFileSuccess(msg.status)) return;
+    // Wire finished (still 「发送中」) or delivery done — always fill size/speed for UI.
+    const wireDone =
+      isFileSuccess(msg.status) ||
+      (msg.from === "me" &&
+        msg.status === "sending" &&
+        Number(msg.size) > 0 &&
+        Number(msg.transferred) >= Number(msg.size));
+    if (!wireDone) return;
     const size = Number(msg.size) || 0;
-    if (size > 0) msg.transferred = size;
+    if (size > 0 && !(Number(msg.transferred) >= size)) msg.transferred = size;
     const elapsed = Math.max(Number(msg.elapsedMs) || 0, 1);
     if (!(Number(msg.elapsedMs) > 0)) msg.elapsedMs = elapsed;
-    msg.speedBps = Math.round((Number(msg.transferred) / elapsed) * 1000);
+    if (!(Number(msg.speedBps) > 0) && Number(msg.transferred) > 0) {
+      msg.speedBps = Math.round((Number(msg.transferred) / elapsed) * 1000);
+    }
+  }
+
+  function releaseOutboundFileSlot(msg) {
+    if (!msg || msg.from !== "me") return;
+    delete state.inflightFiles[msg.id];
+    finishQueuedFileSend(msg.id);
   }
 
   function persistChatAppend(session, msg) {
-    if (!session || !ownerToken() || !msg) return;
-    tauriInvoke("saved_chats_append", {
+    if (!session || !ownerToken() || !msg) return Promise.resolve();
+    return tauriInvoke("saved_chats_append", {
       ownerToken: ownerToken(),
       peerToken: session.peerToken,
       message: persistableMessage(msg),
     }).catch(function (err) {
       if (err && err.message === "webrpc-unavailable") return;
+      throw err;
     });
   }
 
@@ -2839,9 +2880,10 @@
 
   function hydrateMessage(item) {
     item = item || {};
+    const from = item.from === "me" ? "me" : "peer";
     const msg = {
       id: item.id || uid(),
-      from: item.from === "me" ? "me" : "peer",
+      from: from,
       type: item.type || "text",
       content: item.content || "",
       title: item.title || "",
@@ -2853,13 +2895,38 @@
       speedBps: Number(item.speedBps) || 0,
       previewUrl: "",
       filePath: item.filePath || "",
+      // Legacy rows without seenByMe: treat as seen (avoid badge storm).
+      seenByMe: item.seenByMe != null ? !!item.seenByMe : true,
+      readReceiptPending: !!item.readReceiptPending,
     };
+    if (from === "me") {
+      msg.seenByMe = true;
+      msg.readReceiptPending = false;
+    }
     finalizeCompleteFile(msg);
     return msg;
   }
 
+  function refreshSessionUnread(session) {
+    if (!session) return 0;
+    if (session.chatsLoaded && session.messages) {
+      session.unreadCount = sessionUnreadCount(session);
+    } else if (session.unreadCount == null) {
+      session.unreadCount = 0;
+    }
+    return session.unreadCount || 0;
+  }
+
+  function bumpSessionUnread(session, delta) {
+    if (!session || isDrive(session) || isP2pSsh(session)) return;
+    var n = Number(session.unreadCount) || 0;
+    session.unreadCount = Math.max(0, n + (delta || 0));
+  }
+
   function unloadSessionChats(session) {
     if (!session) return;
+    // Keep unreadCount across unload so sidebar badge stays accurate.
+    refreshSessionUnread(session);
     session.chatEpoch = (session.chatEpoch || 0) + 1;
     session.chatsLoading = null;
     session.chatsLoaded = false;
@@ -2890,6 +2957,7 @@
         });
         session.messages = fromDisk.concat(extras);
         session.chatsLoaded = true;
+        refreshSessionUnread(session);
       })
       .catch(function (err) {
         if ((session.chatEpoch || 0) !== epoch) return;
@@ -2967,27 +3035,99 @@
           return item.peerToken === peer && !isDrive(item) && !isP2pSsh(item);
         });
         if (session) {
+          // Inbound text before/without hello: still auto-bind & light up gray row.
           session.rpcSessionId = sessionId;
           session.connected = true;
           session.connecting = false;
           session.connectError = "";
           persistItemUpdate(session);
+          ensureChatHeartbeat();
           renderWorkspace();
         }
       }
     }
-    if (!session) return;
+    if (!session) {
+      // Hello not bound yet — queue until applyPeerHello / peerToken bind.
+      if (!state.pendingOrphanTexts) state.pendingOrphanTexts = [];
+      state.pendingOrphanTexts.push(payload);
+      return;
+    }
     const text = payload.text == null ? "" : String(payload.text);
-    const msg = textMsg("peer", text, Date.now(), "received");
-    persistChatAppend(session, msg);
+    const msgId = String(payload.msgId || "").trim();
+    if (msgId && session.chatsLoaded && session.messages) {
+      const dup = session.messages.find(function (m) {
+        return m.id === msgId;
+      });
+      if (dup) {
+        sendDeliveryAck(session, msgId);
+        return;
+      }
+    }
+    // Dedup against disk even when chats not loaded: still ack so sender leaves 发送中.
+    const msg = textMsg("peer", text, Date.now(), "received", {
+      id: msgId || uid(),
+      seenByMe: false,
+      readReceiptPending: false,
+    });
     const viewing = state.selectedId === session.id && session.connected;
     if (viewing) {
-      session.messages.push(msg);
-      if (session.chatsLoaded) renderChat();
+      if (session.chatsLoaded) {
+        const exists = session.messages.some(function (m) {
+          return m.id === msg.id;
+        });
+        if (!exists) session.messages.push(msg);
+        renderChat();
+      } else {
+        bumpSessionUnread(session, 1);
+        renderSessionList();
+      }
     } else if (session.chatsLoaded) {
-      session.messages.push(msg);
+      const exists = session.messages.some(function (m) {
+        return m.id === msg.id;
+      });
+      if (!exists) session.messages.push(msg);
+      bumpSessionUnread(session, 1);
       if (state.selectedId === session.id) renderChat();
+      else renderSessionList();
+    } else {
+      bumpSessionUnread(session, 1);
+      renderSessionList();
     }
+    // Ack only after disk persist succeeds — sender「未读」= we kept the bubble.
+    persistChatAppend(session, msg).then(function () {
+      if (msgId) sendDeliveryAck(session, msgId);
+    });
+  }
+
+  function flushOrphanTextsForSession(session) {
+    if (!session || !state.pendingOrphanTexts || !state.pendingOrphanTexts.length) {
+      return;
+    }
+    const sid = Number(session.rpcSessionId) || 0;
+    const peer = String(session.peerToken || "").trim();
+    const kept = [];
+    const take = [];
+    state.pendingOrphanTexts.forEach(function (payload) {
+      const psid = Number(payload.sessionId) || 0;
+      const ppeer = String(payload.peerToken || "").trim();
+      if ((sid && psid === sid) || (peer && ppeer && ppeer === peer)) {
+        take.push(payload);
+      } else {
+        kept.push(payload);
+      }
+    });
+    state.pendingOrphanTexts = kept;
+    take.forEach(applyPeerText);
+  }
+
+  function ackPeerFileIfReceived(session, msg, status, payloadMsgId) {
+    if (!session || !msg || msg.from !== "peer") return;
+    if (String(status || msg.status || "") !== "received") return;
+    var ackId = String(payloadMsgId || "").trim();
+    if (!ackId) ackId = String(msg.id || "").trim();
+    // Placeholder ids are local-only; never ack those to the peer.
+    if (!ackId || ackId.indexOf("file-in-") === 0) return;
+    sendDeliveryAck(session, ackId);
   }
 
   function onFileEvent(payload) {
@@ -3000,24 +3140,24 @@
     if (!session) return;
     const from = payload.from === "me" ? "me" : "peer";
     const fileName = String(payload.fileName || "");
-    const msgId = String(payload.msgId || "");
+    const msgId = String(payload.msgId || "").trim();
     const status = String(payload.status || "");
-    const terminal = isFileTerminal(status);
+    if (!session.messages) session.messages = [];
     let msg = null;
     if (msgId && state.inflightFiles[msgId]) {
       msg = state.inflightFiles[msgId].msg;
     }
-    if (!msg && msgId && session.chatsLoaded) {
+    if (!msg && msgId) {
       msg = session.messages.find(function (item) {
         return item.id === msgId;
       });
     }
-    if (!msg && from === "peer" && fileName && session.chatsLoaded) {
+    if (!msg && from === "peer" && fileName) {
       msg = session.messages.find(function (item) {
         return item.id === "file-in-" + fileName;
       });
     }
-    if (!msg && fileName && session.chatsLoaded) {
+    if (!msg && fileName) {
       msg = session.messages.find(function (item) {
         return (
           item.title === fileName &&
@@ -3027,45 +3167,80 @@
         );
       });
     }
-    if (!msg && fileName && session.chatsLoaded && isFileSuccess(status)) {
+    if (!msg && fileName && isFileSuccess(status)) {
       msg = session.messages.slice().reverse().find(function (item) {
         return item.title === fileName && item.from === from && item.type !== "text";
       });
     }
     if (!msg) {
       if (from !== "peer" || !fileName) return;
-      if (!session.chatsLoaded) return;
       msg = fileMsg("peer", classifyFile(fileName), fileName, Number(payload.size) || 0, Date.now(), {
         status: status || "receiving",
         transferred: Number(payload.transferred) || 0,
         elapsedMs: Number(payload.elapsedMs) || 0,
         speedBps: Number(payload.speedBps) || 0,
         filePath: payload.filePath || "",
+        id: msgId || undefined,
+        seenByMe: false,
       });
-      msg.id = "file-in-" + fileName;
+      if (!msgId) msg.id = "file-in-" + fileName;
       finalizeCompleteFile(msg);
-      persistChatAppend(session, msg);
-      if (session.chatsLoaded || state.selectedId === session.id) {
-        session.messages.push(msg);
+      session.messages.push(msg);
+      if (!(state.selectedId === session.id && session.connected)) {
+        bumpSessionUnread(session, 1);
       }
+      persistChatAppend(session, msg).then(function () {
+        ackPeerFileIfReceived(session, msg, status, msgId);
+      });
     } else if (!applyFilePayload(msg, payload, status)) {
+      // Still release the send slot if wire finished after delivery_ack already landed.
+      if (msg && from === "me" && isFileTransferDone(msg, status, payload)) {
+        releaseOutboundFileSlot(msg);
+      }
       return;
     } else {
+      // Promote placeholder id once the peer msgId arrives.
+      if (msgId && msg.id && String(msg.id).indexOf("file-in-") === 0 && msg.id !== msgId) {
+        msg.id = msgId;
+      }
       persistChatUpdate(session, msg);
+      ackPeerFileIfReceived(session, msg, status, msgId);
     }
-    if (terminal && msg) {
-      delete state.inflightFiles[msg.id];
-      if (msg.from === "me") finishQueuedFileSend(msg.id);
+    if (msg && isFileTransferDone(msg, status, payload)) {
+      if (from === "me") releaseOutboundFileSlot(msg);
+      else delete state.inflightFiles[msg.id];
     }
     if (state.selectedId === session.id && session.chatsLoaded) {
       renderChat();
     }
   }
 
+  function applyFileProgressOnly(msg, payload) {
+    if (!msg || !payload) return;
+    if (Number(payload.size) > 0) msg.size = Number(payload.size);
+    if (payload.transferred != null) {
+      const next = Number(payload.transferred) || 0;
+      const cur = Number(msg.transferred) || 0;
+      if (next >= cur || payload.wireComplete) msg.transferred = next;
+    }
+    if (Number(payload.elapsedMs) > 0) msg.elapsedMs = Number(payload.elapsedMs);
+    if (Number(payload.speedBps) > 0) msg.speedBps = Number(payload.speedBps);
+    if (payload.filePath) msg.filePath = payload.filePath;
+  }
+
   function applyFilePayload(msg, payload, status) {
     const incomingTerminal = isFileTerminal(status);
-    if (msg.status === "sent" && status !== "sent") {
-      return false;
+    // Delivery states `sent`/`read` only advance via delivery_ack / read_receipt.
+    // Late wire-complete events must still update bytes so UI is not stuck at 0 B.
+    if (msg.from === "me" && (msg.status === "sent" || msg.status === "read")) {
+      if (status === "failed") {
+        msg.status = "failed";
+        applyFileProgressOnly(msg, payload);
+        return true;
+      }
+      applyFileProgressOnly(msg, payload);
+      finalizeCompleteFile(msg);
+      return true;
     }
     if (msg.status === "received" && status !== "received" && status !== "receiving") {
       return false;
@@ -3083,17 +3258,45 @@
       if (payload.transferred != null) {
         const next = Number(payload.transferred) || 0;
         const cur = Number(msg.transferred) || 0;
-        if (incomingTerminal || next >= cur) {
+        // Monotonic only — never let mid-flight probes rewind progress to 0.
+        if (incomingTerminal || payload.wireComplete || next >= cur) {
           msg.transferred = next;
         }
       }
-      if (payload.elapsedMs != null) msg.elapsedMs = Number(payload.elapsedMs) || 0;
-      if (payload.speedBps != null) msg.speedBps = Number(payload.speedBps) || 0;
-      if (status) msg.status = status;
+      if (payload.elapsedMs != null && (Number(payload.elapsedMs) > 0 || payload.wireComplete)) {
+        msg.elapsedMs = Number(payload.elapsedMs) || msg.elapsedMs || 0;
+      }
+      if (payload.speedBps != null && (Number(payload.speedBps) > 0 || payload.wireComplete)) {
+        msg.speedBps = Number(payload.speedBps) || 0;
+      }
+      if (status) {
+        // Outbound transport "sent" (legacy) → still waiting for delivery_ack.
+        if (msg.from === "me" && status === "sent") {
+          msg.status = "sending";
+          if (msg.size > 0) msg.transferred = msg.size;
+        } else if (!(msg.from === "me" && (msg.status === "sent" || msg.status === "read"))) {
+          msg.status = status;
+        }
+      }
     }
     if (payload.filePath) msg.filePath = payload.filePath;
+    if (payload.wireComplete && msg.from === "me" && msg.status === "sending" && msg.size > 0) {
+      msg.transferred = msg.size;
+    }
     finalizeCompleteFile(msg);
     return true;
+  }
+
+  function isFileTransferDone(msg, status, payload) {
+    if (!msg) return false;
+    if (status === "failed") return true;
+    if (msg.from === "me") {
+      // Release send queue only when local SendFile finished (wireComplete),
+      // never on type4 "bytes == size" probes — those race the still-running job.
+      if (payload && payload.wireComplete) return true;
+      return false;
+    }
+    return status === "received" || status === "failed";
   }
 
   function failSessionTransfers(session) {
@@ -3113,7 +3316,9 @@
       if (active) state.sendActiveId = null;
     }
     session.messages.forEach(function (msg) {
-      if (msg.status === "sending") {
+      // Keep text `sending` for outbox flush on reconnect; fail in-flight files only.
+      if (msg.type === "text" && msg.from === "me" && msg.status === "sending") return;
+      if (msg.status === "sending" || msg.status === "receiving") {
         stopTick(msg.id);
         msg.status = "failed";
         persistChatUpdate(session, msg);
@@ -3172,6 +3377,10 @@
         connectError: "",
         peerPass: permission,
         rpcSessionId: 0,
+        peerCapsAck: false,
+        peerCapsRead: false,
+        peerChatProto: 0,
+        unreadCount: 0,
         messages: [],
         chatsLoaded: false,
         chatsLoading: null,
@@ -3180,11 +3389,30 @@
       state.sessions.unshift(session);
     }
 
+    // Peer dialed us: always light up this chat row (no manual Connect).
     session.connected = true;
     session.connecting = false;
     session.connectError = "";
     session.rpcSessionId = sessionId;
     session.peerPass = permission;
+    var caps = payload.caps;
+    if (!Array.isArray(caps) && payload.data && Array.isArray(payload.data.caps)) {
+      caps = payload.data.caps;
+    }
+    session.peerCapsAck =
+      typeof ChatProtocol !== "undefined" && ChatProtocol.capsIncludeAck(caps);
+    session.peerCapsRead =
+      typeof ChatProtocol !== "undefined" && ChatProtocol.capsIncludeRead(caps);
+    session.peerChatProto =
+      Number(payload.chatProto != null ? payload.chatProto : payload.chat_proto) || 0;
+    if (!isDrive(session) && !isP2pSsh(session)) {
+      replyChatHelloIfNeeded(session);
+      ensureChatHeartbeat();
+      flushChatOutbox(session);
+      flushReadReceiptOutbox(session);
+      // Deliver texts that raced ahead of hello (same rpc / peer token).
+      flushOrphanTextsForSession(session);
+    }
     if (isDrive(session)) startNasWatch(session);
 
     if (existed) {
@@ -3200,6 +3428,9 @@
     renderWorkspace();
     if (state.selectedId === session.id) {
       renderChat();
+    } else if (!isDrive(session) && !isP2pSsh(session)) {
+      // Ensure sidebar shows online for the lit-up gray row.
+      renderSessionList();
     }
   }
 
@@ -3211,6 +3442,7 @@
     session.connected = false;
     session.connecting = false;
     session.nasWatching = false;
+    clearChatSessionProtocol(session, sid);
     session.rpcSessionId = 0;
     session.connectError = isDrive(session)
       ? t("网盘已断开连接，请重新连接。")
@@ -3228,9 +3460,10 @@
     }
   }
 
-  function textMsg(from, content, time, status) {
+  function textMsg(from, content, time, status, extra) {
+    extra = extra || {};
     return {
-      id: uid(),
+      id: extra.id || uid(),
       from: from,
       type: "text",
       content: content,
@@ -3243,13 +3476,15 @@
       speedBps: 0,
       previewUrl: "",
       filePath: "",
+      seenByMe: extra.seenByMe != null ? !!extra.seenByMe : from === "me",
+      readReceiptPending: !!extra.readReceiptPending,
     };
   }
 
   function fileMsg(from, type, title, size, time, extra) {
     extra = extra || {};
     return {
-      id: uid(),
+      id: extra.id || uid(),
       from: from,
       type: type,
       content: "",
@@ -3262,73 +3497,529 @@
       speedBps: extra.speedBps || 0,
       previewUrl: extra.previewUrl || "",
       filePath: extra.filePath || "",
+      seenByMe: extra.seenByMe != null ? !!extra.seenByMe : from === "me",
+      readReceiptPending: !!extra.readReceiptPending,
     };
+  }
+
+  function sessionUnreadCount(session) {
+    if (!session) return 0;
+    if (session.chatsLoaded && session.messages) {
+      var n = 0;
+      session.messages.forEach(function (m) {
+        if (m && m.from !== "me" && m.seenByMe === false) n += 1;
+      });
+      session.unreadCount = n;
+      return n;
+    }
+    return Number(session.unreadCount) || 0;
+  }
+
+  function sendTypedChat(session, kind, data) {
+    if (!session || !session.rpcSessionId) return;
+    tauriInvoke("webrpc_send_typed", {
+      sessionId: session.rpcSessionId,
+      kind: kind,
+      data: data || {},
+    }).catch(function () {});
+  }
+
+  function sendDeliveryAck(session, msgId) {
+    if (!msgId || typeof ChatProtocol === "undefined") return;
+    sendTypedChat(session, ChatProtocol.DELIVERY_ACK, ChatProtocol.ackPayload(msgId));
+  }
+
+  var helloRepliedRpc = {};
+  var pendingReadIds = {};
+  var pendingReadTimers = {};
+  var chatHeartbeatMisses = {};
+  var chatHeartbeatTimer = null;
+
+  function clearChatSessionProtocol(session, sid) {
+    var rpc = sid != null ? sid : session && session.rpcSessionId;
+    if (rpc) delete helloRepliedRpc[rpc];
+    if (session) {
+      session.peerCapsAck = false;
+      session.peerCapsRead = false;
+      session.peerChatProto = 0;
+      if (session.id) {
+        if (pendingReadTimers[session.id]) {
+          window.clearTimeout(pendingReadTimers[session.id]);
+          delete pendingReadTimers[session.id];
+        }
+        delete pendingReadIds[session.id];
+        delete chatHeartbeatMisses[session.id];
+      }
+    }
+  }
+
+  function replyChatHelloIfNeeded(session) {
+    if (!session || !session.rpcSessionId || typeof ChatProtocol === "undefined") return;
+    var sid = session.rpcSessionId;
+    if (helloRepliedRpc[sid]) return;
+    helloRepliedRpc[sid] = true;
+    sendTypedChat(session, ChatProtocol.HELLO, {
+      sessionId: sid,
+      token: (state.user && state.user.token) || "",
+      permission: (state.user && state.user.passphrase) || "",
+      chatProto: ChatProtocol.CHAT_PROTO,
+      caps: ChatProtocol.localCaps(),
+    });
+  }
+
+  function sendReadReceipt(session, msgIds) {
+    if (!session || !msgIds || !msgIds.length) return false;
+    if (!session.rpcSessionId || typeof ChatProtocol === "undefined") return false;
+    var payload = ChatProtocol.readPayload(msgIds);
+    if (!payload.msgIds.length) return false;
+    sendTypedChat(session, ChatProtocol.READ_RECEIPT, payload);
+    return true;
+  }
+
+  function markReadReceiptsSent(session, msgIds) {
+    if (!session || !session.messages || !msgIds || !msgIds.length) return;
+    var set = {};
+    msgIds.forEach(function (id) {
+      if (id) set[id] = true;
+    });
+    session.messages.forEach(function (m) {
+      if (!m || m.from === "me" || !set[m.id]) return;
+      if (!m.readReceiptPending) return;
+      m.readReceiptPending = false;
+      persistChatUpdate(session, m);
+    });
+  }
+
+  function queueReadReceipt(session, msgIds) {
+    if (!session || !msgIds || !msgIds.length) return;
+    var key = session.id;
+    if (!pendingReadIds[key]) pendingReadIds[key] = {};
+    msgIds.forEach(function (id) {
+      if (id) pendingReadIds[key][id] = true;
+    });
+    if (pendingReadTimers[key]) window.clearTimeout(pendingReadTimers[key]);
+    pendingReadTimers[key] = window.setTimeout(function () {
+      pendingReadTimers[key] = null;
+      var map = pendingReadIds[key] || {};
+      delete pendingReadIds[key];
+      var ids = Object.keys(map);
+      if (!ids.length) return;
+      if (sendReadReceipt(session, ids)) {
+        markReadReceiptsSent(session, ids);
+      }
+      // If offline, readReceiptPending stays true → flushReadReceiptOutbox later.
+    }, 50);
+  }
+
+  function flushReadReceiptOutbox(session) {
+    if (!session || !session.connected || !session.rpcSessionId) return;
+    var ids = [];
+    function collect(list) {
+      (list || []).forEach(function (m) {
+        // Re-send for every already-seen peer bubble (not only pending once).
+        if (m && m.from !== "me" && m.seenByMe) {
+          ids.push(m.id);
+        }
+      });
+    }
+    if (session.chatsLoaded) {
+      collect(session.messages);
+      if (!ids.length) return;
+      if (sendReadReceipt(session, ids)) markReadReceiptsSent(session, ids);
+      return;
+    }
+    // Chats not in memory — load then flush pending receipts.
+    loadSessionChats(session).then(function () {
+      if (!session.connected || !session.rpcSessionId) return;
+      ids = [];
+      collect(session.messages);
+      if (!ids.length) return;
+      if (sendReadReceipt(session, ids)) markReadReceiptsSent(session, ids);
+      if (state.selectedId !== session.id) {
+        // Loaded only for outbox; drop memory but keep unreadCount.
+        refreshSessionUnread(session);
+        session.chatsLoaded = false;
+        session.messages = [];
+      }
+    });
+  }
+
+  function onDeliveryAck(payload) {
+    if (!payload) return;
+    var sid = Number(payload.sessionId) || 0;
+    var msgId = String(payload.msgId || "").trim();
+    if (!sid || !msgId) return;
+    var session = findByRpcSessionId(sid);
+    if (!session || !session.messages) return;
+    var msg = session.messages.find(function (m) {
+      return m.id === msgId && m.from === "me";
+    });
+    if (!msg) return;
+    if (msg.status === "failed") return;
+    // Never downgrade 已读 → 未读 when delivery_ack arrives after read.
+    if (msg.status !== "read" && msg.status !== "sent") {
+      msg.status = "sent";
+    }
+    // Peer ACK can arrive before the local wireComplete event; fill bytes and
+    // always free the send queue so the next file is not stuck forever.
+    if (msg.type !== "text") {
+      if (Number(msg.size) > 0) msg.transferred = Number(msg.size);
+      finalizeCompleteFile(msg);
+      releaseOutboundFileSlot(msg);
+    }
+    persistChatUpdate(session, msg);
+    if (state.selectedId === session.id) renderChat();
+  }
+
+  function onReadReceipt(payload) {
+    if (!payload) return;
+    var sid = Number(payload.sessionId) || 0;
+    var session = findByRpcSessionId(sid);
+    if (!session || !session.messages) return;
+    var ids = Array.isArray(payload.msgIds) ? payload.msgIds : [];
+    if (!ids.length && payload.msgId) ids = [payload.msgId];
+    var changed = false;
+    ids.forEach(function (raw) {
+      var id = String(raw || "").trim();
+      if (!id) return;
+      var msg = session.messages.find(function (m) {
+        return m.id === id && m.from === "me";
+      });
+      if (!msg || msg.status === "failed" || msg.status === "read") return;
+      msg.status = "read";
+      if (msg.type !== "text") {
+        if (Number(msg.size) > 0) msg.transferred = Number(msg.size);
+        finalizeCompleteFile(msg);
+        releaseOutboundFileSlot(msg);
+      }
+      persistChatUpdate(session, msg);
+      changed = true;
+    });
+    if (changed && state.selectedId === session.id) renderChat();
+  }
+
+  function onChatPing(payload) {
+    if (!payload) return;
+    var sid = Number(payload.sessionId) || 0;
+    var session = findByRpcSessionId(sid);
+    if (!session || !session.rpcSessionId || typeof ChatProtocol === "undefined") return;
+    sendTypedChat(session, ChatProtocol.PONG, ChatProtocol.pongPayload(payload.t));
+  }
+
+  function onChatPong(payload) {
+    if (!payload) return;
+    var sid = Number(payload.sessionId) || 0;
+    var session = findByRpcSessionId(sid);
+    if (!session) return;
+    chatHeartbeatMisses[session.id] = 0;
+  }
+
+  /** Always (re)send type-25 for these peer bubbles — visible / click / re-enter. */
+  function confirmPeerMessagesRead(session, msgIds) {
+    if (!session || !session.messages || !msgIds || !msgIds.length) return;
+    var ids = [];
+    var seenChanged = false;
+    msgIds.forEach(function (raw) {
+      var id = String(raw || "").trim();
+      if (!id) return;
+      var msg = session.messages.find(function (m) {
+        return m.id === id && m.from !== "me";
+      });
+      if (!msg) return;
+      if (!msg.seenByMe) {
+        msg.seenByMe = true;
+        seenChanged = true;
+      }
+      msg.readReceiptPending = true;
+      persistChatUpdate(session, msg);
+      ids.push(id);
+    });
+    if (!ids.length) return;
+    if (seenChanged) {
+      refreshSessionUnread(session);
+      renderSessionList();
+    }
+    queueReadReceipt(session, ids);
+  }
+
+  function markPeerMessagesSeen(session, msgIds) {
+    confirmPeerMessagesRead(session, msgIds);
+  }
+
+  /** Near-bottom / re-open chat: re-send read for every peer bubble. */
+  function markAllUnseenPeerMessages(session) {
+    if (!session || !session.messages) return;
+    var ids = [];
+    session.messages.forEach(function (m) {
+      if (m && m.from !== "me") ids.push(m.id);
+    });
+    if (ids.length) confirmPeerMessagesRead(session, ids);
+  }
+
+  var CHAT_NEAR_BOTTOM_SLOP = 96;
+  function isChatNearBottom() {
+    if (!chatLog) return true;
+    return chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight <= CHAT_NEAR_BOTTOM_SLOP;
+  }
+
+  function markSeenIfChatNearBottom() {
+    if (!isChatNearBottom()) return;
+    var session = findItem(state.selectedId);
+    if (!session || isDrive(session) || isP2pSsh(session)) return;
+    markAllUnseenPeerMessages(session);
+  }
+
+  var chatReadObserver = null;
+  function observeChatReadReceipts(session) {
+    if (chatReadObserver) {
+      try {
+        chatReadObserver.disconnect();
+      } catch (_) {}
+      chatReadObserver = null;
+    }
+    if (!session || !chatLog || typeof IntersectionObserver === "undefined") return;
+    chatReadObserver = new IntersectionObserver(
+      function (entries) {
+        var ids = [];
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          var id = entry.target.getAttribute("data-msg-id");
+          if (id) ids.push(id);
+        });
+        if (ids.length) markPeerMessagesSeen(session, ids);
+      },
+      { root: chatLog, threshold: 0.15 }
+    );
+    chatLog.querySelectorAll(".msg-row:not(.is-me) .msg-bubble[data-msg-id]").forEach(function (el) {
+      chatReadObserver.observe(el);
+    });
+  }
+
+  function flushChatOutbox(session) {
+    if (!session || !session.connected || !session.rpcSessionId || !session.messages) return;
+    session.messages.forEach(function (msg) {
+      if (!msg || msg.from !== "me" || msg.type !== "text") return;
+      if (msg.status !== "sending") return;
+      sendTextMessage(session, msg);
+    });
+  }
+
+  function ensureChatHeartbeat() {
+    if (chatHeartbeatTimer) return;
+    var interval =
+      typeof ChatProtocol !== "undefined" ? ChatProtocol.HEARTBEAT_MS : 15000;
+    var missLimit =
+      typeof ChatProtocol !== "undefined" ? ChatProtocol.HEARTBEAT_MISS_LIMIT : 3;
+    chatHeartbeatTimer = window.setInterval(function () {
+      state.sessions.forEach(function (session) {
+        if (!session || isDrive(session) || isP2pSsh(session)) return;
+        if (!session.connected || !session.rpcSessionId) return;
+        if (typeof ChatProtocol === "undefined") return;
+        sendTypedChat(session, ChatProtocol.PING, ChatProtocol.pingPayload(Date.now()));
+        var misses = (chatHeartbeatMisses[session.id] || 0) + 1;
+        chatHeartbeatMisses[session.id] = misses;
+        if (misses >= missLimit) {
+          chatHeartbeatMisses[session.id] = 0;
+          var sid = session.rpcSessionId;
+          session.connected = false;
+          session.connecting = false;
+          clearChatSessionProtocol(session, sid);
+          session.rpcSessionId = 0;
+          session.connectError = t("对端已断开连接，请重新连接。");
+          if (sid) {
+            tauriInvoke("webrpc_close_session", { sessionId: sid }).catch(function () {});
+          }
+          failSessionTransfers(session);
+          renderWorkspace();
+          if (state.selectedId === session.id) {
+            state.connectFillId = null;
+            renderChat();
+          }
+        }
+      });
+    }, interval);
+  }
+
+  function normalizeSidebarRatios(chat, drive) {
+    const minR = 0.12;
+    let c = Number(chat);
+    let d = Number(drive);
+    if (!(c >= minR) || !(d >= minR)) {
+      c = 0.34;
+      d = 0.33;
+    }
+    let s = 1 - c - d;
+    if (s < minR) {
+      const scale = (1 - minR) / (c + d);
+      c *= scale;
+      d *= scale;
+      s = minR;
+    }
+    const sum = c + d + s;
+    return { chat: c / sum, drive: d / sum };
   }
 
   function loadSidebarSplit() {
     try {
-      const n = Number(window.localStorage.getItem(SIDEBAR_SPLIT_KEY));
-      if (n >= 0.18 && n <= 0.82) sidebarSplitRatio = n;
+      const raw = window.localStorage.getItem(SIDEBAR_SPLIT_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object") {
+          sidebarSplitRatios = normalizeSidebarRatios(parsed.chat, parsed.drive);
+          return;
+        }
+      }
+      const legacy = Number(window.localStorage.getItem(SIDEBAR_SPLIT_KEY_LEGACY));
+      if (legacy >= 0.18 && legacy <= 0.82) {
+        const rest = 1 - legacy;
+        sidebarSplitRatios = normalizeSidebarRatios(legacy, rest / 2);
+      }
     } catch (_) {}
   }
 
   function saveSidebarSplit() {
     try {
-      window.localStorage.setItem(SIDEBAR_SPLIT_KEY, String(sidebarSplitRatio));
+      window.localStorage.setItem(SIDEBAR_SPLIT_KEY, JSON.stringify(sidebarSplitRatios));
     } catch (_) {}
   }
 
-  function applySidebarSplit() {
+  function sidebarSplitMetrics() {
     const pane = document.getElementById("session-pane");
     const chat = document.getElementById("session-section-chat");
-    const split = document.getElementById("session-split");
-    if (!pane || !chat || pane.clientHeight < SIDEBAR_SPLIT_MIN * 2) return;
-    const splitH = split ? split.offsetHeight : 8;
-    const max = pane.clientHeight - SIDEBAR_SPLIT_MIN - splitH;
-    const top = Math.round(
-      Math.min(max, Math.max(SIDEBAR_SPLIT_MIN, sidebarSplitRatio * pane.clientHeight))
-    );
-    chat.style.flex = "0 0 " + top + "px";
+    const drive = document.getElementById("session-section-drive");
+    const ssh = document.getElementById("session-section-p2pssh");
+    const split1 = document.getElementById("session-split-chat-drive");
+    const split2 = document.getElementById("session-split-drive-ssh");
+    if (!pane || !chat || !drive || !ssh) return null;
+    const splitH = (split1 ? split1.offsetHeight : 8) + (split2 ? split2.offsetHeight : 8);
+    const avail = pane.clientHeight - splitH;
+    if (avail < SIDEBAR_SPLIT_MIN * 3) return null;
+    return { pane: pane, chat: chat, drive: drive, ssh: ssh, split1: split1, split2: split2, avail: avail };
+  }
+
+  function applySidebarSplit() {
+    const m = sidebarSplitMetrics();
+    if (!m) return;
+    const min = SIDEBAR_SPLIT_MIN;
+    const avail = m.avail;
+    let chatPx = Math.round(sidebarSplitRatios.chat * avail);
+    let drivePx = Math.round(sidebarSplitRatios.drive * avail);
+    let sshPx = avail - chatPx - drivePx;
+    if (chatPx < min) {
+      sshPx -= min - chatPx;
+      chatPx = min;
+    }
+    if (drivePx < min) {
+      sshPx -= min - drivePx;
+      drivePx = min;
+    }
+    if (sshPx < min) {
+      const need = min - sshPx;
+      const takeChat = Math.min(need, Math.max(0, chatPx - min));
+      chatPx -= takeChat;
+      const takeDrive = Math.min(need - takeChat, Math.max(0, drivePx - min));
+      drivePx -= takeDrive;
+      sshPx = avail - chatPx - drivePx;
+    }
+    m.chat.style.flex = "0 0 " + chatPx + "px";
+    m.drive.style.flex = "0 0 " + drivePx + "px";
+    m.ssh.style.flex = "0 0 " + sshPx + "px";
+    sidebarSplitRatios = normalizeSidebarRatios(chatPx / avail, drivePx / avail);
   }
 
   function bindSidebarSplit() {
     const pane = document.getElementById("session-pane");
-    const split = document.getElementById("session-split");
-    if (!pane || !split) return;
+    const split1 = document.getElementById("session-split-chat-drive");
+    const split2 = document.getElementById("session-split-drive-ssh");
+    if (!pane || !split1 || !split2) return;
     loadSidebarSplit();
     applySidebarSplit();
 
-    split.addEventListener("pointerdown", function (event) {
-      if (event.button != null && event.button !== 0) return;
-      event.preventDefault();
-      sidebarSplitDragging = true;
-      split.classList.add("is-dragging");
-      pane.classList.add("is-resizing");
-      if (split.setPointerCapture) split.setPointerCapture(event.pointerId);
-    });
-    split.addEventListener("pointermove", function (event) {
-      if (!sidebarSplitDragging) return;
-      const rect = pane.getBoundingClientRect();
-      const splitH = split.offsetHeight || 8;
-      const max = rect.height - SIDEBAR_SPLIT_MIN - splitH;
-      const top = Math.min(max, Math.max(SIDEBAR_SPLIT_MIN, event.clientY - rect.top));
-      sidebarSplitRatio = top / rect.height;
-      applySidebarSplit();
-    });
-    function endSplitDrag() {
-      if (!sidebarSplitDragging) return;
-      sidebarSplitDragging = false;
-      split.classList.remove("is-dragging");
-      pane.classList.remove("is-resizing");
-      saveSidebarSplit();
+    function bindOne(split, kind) {
+      split.addEventListener("pointerdown", function (event) {
+        if (event.button != null && event.button !== 0) return;
+        event.preventDefault();
+        sidebarSplitDragging = kind;
+        split.classList.add("is-dragging");
+        pane.classList.add("is-resizing");
+        if (split.setPointerCapture) split.setPointerCapture(event.pointerId);
+      });
+      split.addEventListener("pointermove", function (event) {
+        if (sidebarSplitDragging !== kind) return;
+        const m = sidebarSplitMetrics();
+        if (!m) return;
+        const rect = m.pane.getBoundingClientRect();
+        const y = event.clientY - rect.top;
+        const min = SIDEBAR_SPLIT_MIN;
+        const avail = m.avail;
+        const s1 = m.split1 ? m.split1.offsetHeight : 8;
+        let chatPx = Math.round(sidebarSplitRatios.chat * avail);
+        let drivePx = Math.round(sidebarSplitRatios.drive * avail);
+        let sshPx = avail - chatPx - drivePx;
+        if (kind === "chat-drive") {
+          // Keep SSH height; move boundary between chat and drive.
+          chatPx = Math.min(avail - min - sshPx, Math.max(min, Math.round(y)));
+          drivePx = avail - chatPx - sshPx;
+          if (drivePx < min) {
+            chatPx = avail - min - sshPx;
+            drivePx = min;
+          }
+        } else {
+          // Keep chat height; move boundary between drive and SSH.
+          drivePx = Math.min(
+            avail - chatPx - min,
+            Math.max(min, Math.round(y - chatPx - s1))
+          );
+          sshPx = avail - chatPx - drivePx;
+        }
+        sidebarSplitRatios = normalizeSidebarRatios(chatPx / avail, drivePx / avail);
+        applySidebarSplit();
+        positionOpenSessionMenu();
+      });
+      function endSplitDrag() {
+        if (sidebarSplitDragging !== kind) return;
+        sidebarSplitDragging = null;
+        split.classList.remove("is-dragging");
+        pane.classList.remove("is-resizing");
+        saveSidebarSplit();
+      }
+      split.addEventListener("pointerup", endSplitDrag);
+      split.addEventListener("pointercancel", endSplitDrag);
+      split.addEventListener("dblclick", function () {
+        sidebarSplitRatios = { chat: 1 / 3, drive: 1 / 3 };
+        applySidebarSplit();
+        saveSidebarSplit();
+      });
     }
-    split.addEventListener("pointerup", endSplitDrag);
-    split.addEventListener("pointercancel", endSplitDrag);
-    split.addEventListener("dblclick", function () {
-      sidebarSplitRatio = 0.5;
-      applySidebarSplit();
-      saveSidebarSplit();
-    });
+    bindOne(split1, "chat-drive");
+    bindOne(split2, "drive-ssh");
+  }
+
+  function positionOpenSessionMenu() {
+    const row = document.querySelector(".session-row.is-menu-open");
+    if (!row) return;
+    const menu = row.querySelector(".session-dropdown");
+    const gear = row.querySelector(".session-gear");
+    if (!menu || !gear) return;
+    const r = gear.getBoundingClientRect();
+    const pad = 8;
+    menu.style.left = "auto";
+    menu.style.right = Math.max(pad, window.innerWidth - r.right) + "px";
+    menu.style.top = r.bottom + 2 + "px";
+    menu.style.visibility = "hidden";
+    const mh = menu.offsetHeight || 0;
+    const mw = menu.offsetWidth || 140;
+    let top = r.bottom + 2;
+    if (top + mh > window.innerHeight - pad) {
+      top = Math.max(pad, r.top - mh - 2);
+    }
+    let right = Math.max(pad, window.innerWidth - r.right);
+    if (window.innerWidth - right - mw < pad) {
+      right = Math.max(pad, window.innerWidth - mw - pad);
+    }
+    menu.style.top = top + "px";
+    menu.style.right = right + "px";
+    menu.style.visibility = "";
   }
 
   function loadNasView() {
@@ -6157,6 +6848,84 @@
     beginNasPreview(session, name, kind);
     const seq = session.nasPreviewSeq;
     showNasPreview(session, name, "", t("正在加载预览…"), true);
+    const remoteDir = session.nasPreviewPath || normalizeNasPath(session.nasPath || "/");
+    // mpv primary over HTTP Range proxy; on fail → SendFile local (mpv, then HTML5).
+    tauriInvoke("nas_media_stream_url", {
+      sessionId: session.rpcSessionId || 0,
+      remoteDir: remoteDir,
+      fileName: name,
+    })
+      .then(function (url) {
+        if (!session || session.nasPreviewSeq !== seq) return;
+        if (url) {
+          openNasPreviewWithMpv(session, String(url), function () {
+            if (!session || session.nasPreviewSeq !== seq) return;
+            previewNasStreamViaSendFile(session, file, seq);
+          });
+          return;
+        }
+        previewNasStreamViaSendFile(session, file, seq);
+      })
+      .catch(function () {
+        if (!session || session.nasPreviewSeq !== seq) return;
+        previewNasStreamViaSendFile(session, file, seq);
+      });
+  }
+
+  function clearNasPreviewMediaEls() {
+    if (nasPreviewVideo) {
+      nasPreviewVideo.pause();
+      nasPreviewVideo.removeAttribute("src");
+      nasPreviewVideo.load();
+      nasPreviewVideo.hidden = true;
+    }
+    if (nasPreviewAudio) {
+      nasPreviewAudio.pause();
+      nasPreviewAudio.removeAttribute("src");
+      nasPreviewAudio.load();
+      nasPreviewAudio.hidden = true;
+    }
+  }
+
+  function showNasMpvPlaying(session) {
+    stopNasStreamPump();
+    clearNasPreviewMediaEls();
+    nasStreamCtl.playing = true;
+    nasStreamCtl.complete = true;
+    nasStreamCtl.attached = true;
+    showNasPreview(
+      session,
+      session && session.nasPreviewName,
+      "",
+      t("已用 mpv 打开播放"),
+      false
+    );
+  }
+
+  /** Try system mpv; call onFail when mpv missing / spawn fails / exits early. */
+  function openNasPreviewWithMpv(session, source, onFail) {
+    if (!source) {
+      if (typeof onFail === "function") onFail();
+      return;
+    }
+    stopNasStreamPump();
+    clearNasPreviewMediaEls();
+    setNasPreviewLoading(true, t("正在用 mpv 打开…"));
+    tauriInvoke("nas_mpv_play", { source: String(source) })
+      .then(function () {
+        if (!session || !nasPreview || nasPreview.hidden) {
+          tauriInvoke("nas_mpv_stop").catch(function () {});
+          return;
+        }
+        showNasMpvPlaying(session);
+      })
+      .catch(function () {
+        if (typeof onFail === "function") onFail();
+      });
+  }
+
+  function previewNasStreamViaSendFile(session, file, seq) {
+    const name = file.name;
     requestNasPreviewFile(session, file, seq, function (result) {
       if (!result || !result.localPath) {
         showNasPreview(session, name, "", t("无法预览，请稍后重试"), false);
@@ -6172,6 +6941,7 @@
 
   function beginNasPreview(session, name, kind) {
     stopNasStreamPump();
+    tauriInvoke("nas_mpv_stop").catch(function () {});
     session.nasPreviewSeq = (session.nasPreviewSeq || 0) + 1;
     session.nasPreviewName = name;
     session.nasPreviewKind = kind;
@@ -6267,7 +7037,7 @@
     showNasPreview(session, name, src, "", false, "image");
   }
 
-  function openNasPreviewStream(session, localPath, complete) {
+  function openNasPreviewHtml5(session, localPath, complete) {
     const kind = (session && session.nasPreviewKind) || "video";
     const el = nasStreamEl(kind);
     if (!el) {
@@ -6309,6 +7079,17 @@
         showNasPreview(session, session.nasPreviewName, "", nasStreamFailText(session.nasPreviewKind), false);
       }, 8000);
     }
+  }
+
+  function openNasPreviewStream(session, localPath, complete) {
+    // Progressive download: keep HTML5 peek. Finished file: mpv first, then HTML5.
+    if (!complete) {
+      openNasPreviewHtml5(session, localPath, false);
+      return;
+    }
+    openNasPreviewWithMpv(session, localPath, function () {
+      openNasPreviewHtml5(session, localPath, true);
+    });
   }
 
   function startNasStreamPump(session, seq, localPath) {
@@ -6419,23 +7200,13 @@
     if (!nasPreview) return;
     nasPreview.hidden = true;
     stopNasStreamPump();
+    tauriInvoke("nas_mpv_stop").catch(function () {});
     if (nasPreviewImage) {
       nasPreviewImage.removeAttribute("src");
       nasPreviewImage.alt = "";
       nasPreviewImage.hidden = true;
     }
-    if (nasPreviewVideo) {
-      nasPreviewVideo.pause();
-      nasPreviewVideo.removeAttribute("src");
-      nasPreviewVideo.load();
-      nasPreviewVideo.hidden = true;
-    }
-    if (nasPreviewAudio) {
-      nasPreviewAudio.pause();
-      nasPreviewAudio.removeAttribute("src");
-      nasPreviewAudio.load();
-      nasPreviewAudio.hidden = true;
-    }
+    clearNasPreviewMediaEls();
     setNasPreviewLoading(false, "");
     const session = selectedDrive();
     if (session) {
@@ -7685,7 +8456,10 @@
     if (p2psshListEl) p2psshListEl.addEventListener("click", onSessionListClick);
     chatLog.addEventListener("click", onChatLogClick);
     chatLog.addEventListener("contextmenu", onChatLogContextMenu);
-    chatLog.addEventListener("scroll", hideBubbleMenu);
+    chatLog.addEventListener("scroll", function () {
+      hideBubbleMenu();
+      markSeenIfChatNearBottom();
+    });
     if (bubbleMenu) {
       bubbleMenu.addEventListener("click", onBubbleMenuClick);
       bubbleMenu.addEventListener("contextmenu", function (event) {
@@ -7696,8 +8470,19 @@
       hideBubbleMenu();
       refreshCopyButtons();
       applySidebarSplit();
+      positionOpenSessionMenu();
       layoutDesktopCanvas();
     });
+    const sessionPane = document.getElementById("session-pane");
+    if (sessionPane) {
+      sessionPane.addEventListener(
+        "scroll",
+        function () {
+          if (state.menuSessionId) positionOpenSessionMenu();
+        },
+        true
+      );
+    }
     document.addEventListener("keydown", function (event) {
       if (event.key === "Escape") {
         if (nasSearchDrop && !nasSearchDrop.hidden) {
@@ -8023,6 +8808,10 @@
     } catch (err) {
       console.error("renderChat failed", err);
     }
+    if (state.menuSessionId) {
+      positionOpenSessionMenu();
+      window.requestAnimationFrame(positionOpenSessionMenu);
+    }
   }
 
   function renderSessionList() {
@@ -8072,6 +8861,18 @@
         const on = session.connected ? " is-on" : "";
         const online = session.connected ? " is-online" : "";
         const menuOpen = session.id === state.menuSessionId;
+        const unread =
+          opts.glyph === "chat" && session.id !== state.selectedId
+            ? sessionUnreadCount(session)
+            : 0;
+        const unreadBadge =
+          unread > 0
+            ? '<span class="session-unread" aria-label="' +
+              escapeHtml(t("未读消息")) +
+              '">' +
+              (unread > 99 ? "99+" : String(unread)) +
+              "</span>"
+            : "";
         const closeBtn = session.connected
           ? '<button type="button" data-action="close">' + opts.closeLabel + "</button>"
           : "";
@@ -8117,7 +8918,10 @@
           icon +
           '<div class="session-item-body">' +
           '<span class="session-item-title">' +
+          '<span class="session-item-title-text">' +
           escapeHtml(title) +
+          "</span>" +
+          unreadBadge +
           "</span>" +
           '<span class="session-item-sub">' +
           escapeHtml(sub) +
@@ -8265,6 +9069,9 @@
     window.requestAnimationFrame(function () {
       refreshCopyButtons();
       refreshFolderButtons();
+      observeChatReadReceipts(session);
+      markAllUnseenPeerMessages(session);
+      flushReadReceiptOutbox(session);
     });
   }
 
@@ -8449,6 +9256,16 @@
       event.preventDefault();
       openMediaOverlay(preview.getAttribute("data-open-media"));
     }
+    // Clicking a peer bubble (text / file / image) re-sends type-25.
+    const bubble = event.target.closest(".msg-bubble");
+    if (bubble && chatLog.contains(bubble)) {
+      const row = bubble.closest(".msg-row");
+      if (row && !row.classList.contains("is-me")) {
+        const session = findSession(state.selectedId);
+        const msgId = bubble.getAttribute("data-msg-id");
+        if (session && msgId) confirmPeerMessagesRead(session, [msgId]);
+      }
+    }
   }
 
   function resendMessage(msgId) {
@@ -8474,9 +9291,16 @@
   function sendTextMessage(session, msg) {
     const localId = session.id;
     const rpcId = session.rpcSessionId || 0;
-    return tauriInvoke("webrpc_send_data", { sessionId: rpcId, text: msg.content || "" })
+    return tauriInvoke("webrpc_send_data", {
+      sessionId: rpcId,
+      text: msg.content || "",
+      msgId: msg.id || "",
+    })
       .then(function (ok) {
-        msg.status = ok ? "sent" : "failed";
+        if (!ok) {
+          msg.status = "failed";
+        }
+        // Strict delivery: keep `sending` until type-20 delivery_ack →「未读」.
         persistChatUpdate(session, msg);
         if (state.selectedId === localId && session.chatsLoaded) renderChat();
       })
@@ -8600,13 +9424,13 @@
         badge +
         "</div>";
     }
-    const busy = msg.status === "sending" || msg.status === "receiving";
+    const transferring = msg.status === "sending" || msg.status === "receiving";
+    const bytesDone = msg.size > 0 && msg.transferred >= msg.size;
+    const showBar = transferring && !bytesDone;
     const percent = msg.size ? Math.min(100, Math.round((msg.transferred / msg.size) * 100)) : 0;
-    const movedLabel = msg.from === "me" ? t("已发送") : t("已接收");
+    // Option A: card only shows byte progress; 发送中/未读/已读 live in msg-meta.
     const xfer =
       '<div class="file-xfer">' +
-      movedLabel +
-      " " +
       formatSize(msg.transferred) +
       " / " +
       formatSize(msg.size) +
@@ -8614,7 +9438,7 @@
       formatDuration(msg.elapsedMs) +
       t(" · 平均 {speed}", { speed: formatSpeed(msg.speedBps) }) +
       "</div>";
-    const bar = busy
+    const bar = showBar
       ? '<div class="xfer-bar"><span style="width:' + percent + '%"></span></div>'
       : "";
     const cardClass =
@@ -8658,9 +9482,12 @@
     function span(cls, key) {
       return '<span class="msg-status ' + cls + '">' + t(key) + "</span>";
     }
+    const session = findItem(state.selectedId);
+    const peerCapsRead = !!(session && session.peerCapsRead);
     if (msg.type !== "text") {
       if (msg.from === "me") {
-        if (msg.status === "sent") return span("is-sent", "发送成功");
+        if (msg.status === "read") return span("is-sent", "已读");
+        if (msg.status === "sent") return span("is-busy", "未读");
         if (msg.status === "failed") return span("is-failed", "发送失败");
         if (msg.status === "sending") return span("is-busy", "发送中");
       } else {
@@ -8670,9 +9497,17 @@
       }
       return "";
     }
-    if (msg.status === "sent" || msg.status === "received") return span("is-sent", "已发送");
-    if (msg.status === "failed") return span("is-failed", "发送失败");
-    if (msg.status === "sending") return span("is-busy", "发送中");
+    if (msg.from === "me") {
+      // Once status is read, always show 已读 (persisted); peerCapsRead only
+      // gates whether we expect receipts for `sent` messages.
+      if (msg.status === "read") return span("is-sent", "已读");
+      if (msg.status === "sent") return span("is-busy", "未读");
+      if (msg.status === "failed") return span("is-failed", "发送失败");
+      if (msg.status === "sending") return span("is-busy", "发送中");
+      return span("is-busy", peerCapsRead ? "未读" : "未读");
+    }
+    if (msg.status === "received") return "";
+    if (msg.status === "failed") return span("is-failed", "接收失败");
     if (msg.status === "receiving") return span("is-busy", "接收中");
     return "";
   }
@@ -8780,10 +9615,19 @@
         current.connected = true;
         current.rpcSessionId = sid;
         current.connectError = "";
+        current.peerCapsAck = false;
+        current.peerCapsRead = false;
+        current.peerChatProto = 0;
+        // Rust already sent hello with caps; don't reply again on peer hello.
+        if (sid) helloRepliedRpc[sid] = true;
         persistItemUpdate(current);
         if (isDrive(current)) {
           startNasWatch(current);
           bindNasTaskSession(current);
+        } else if (!isP2pSsh(current)) {
+          ensureChatHeartbeat();
+          flushChatOutbox(current);
+          flushReadReceiptOutbox(current);
         }
         renderWorkspace();
       })
@@ -8813,6 +9657,7 @@
       return tauriInvoke("p2pssh_disconnect", { id: id }).catch(function () {});
     }
     const sid = session && session.rpcSessionId ? session.rpcSessionId : 0;
+    clearChatSessionProtocol(session, sid);
     if (session) session.rpcSessionId = 0;
     if (!sid) return Promise.resolve();
     return tauriInvoke("webrpc_close_session", { sessionId: sid }).catch(function () {});
@@ -9364,7 +10209,14 @@
 
   function sendComposer() {
     const session = findSession(state.selectedId);
-    if (!session || !session.connected) return;
+    if (!session) {
+      openInfoPrompt(t("无法发送消息"), t("请先选择并连接一个会话。"));
+      return;
+    }
+    if (!session.connected || !session.rpcSessionId) {
+      openInfoPrompt(t("无法发送消息"), t("会话未连接。请确认对方在线后先连接，再发送。"));
+      return;
+    }
     const text = composerInput.value.trim();
     const pending = state.pendingFile;
     if (!text && !pending) return;
@@ -9407,7 +10259,8 @@
       msg.elapsedMs = elapsed;
       msg.speedBps = elapsed ? Math.round((msg.transferred / elapsed) * 1000) : 0;
       if (msg.transferred >= msg.size) {
-        msg.status = outbound ? "sent" : "received";
+        // Outbound stays `sending` until delivery_ack; inbound becomes received.
+        if (!outbound) msg.status = "received";
         stopTick(msg.id);
         persistChatUpdate(session, msg);
       }

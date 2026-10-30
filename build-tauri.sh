@@ -33,6 +33,12 @@ sync_ui() {
   cp -f "${PROJECT_ROOT}/js/app.js" "${UI_DIR}/js/app.js"
   cp -f "${PROJECT_ROOT}/js/i18n.js" "${UI_DIR}/js/i18n.js"
   cp -f "${PROJECT_ROOT}/js/screenshot.js" "${UI_DIR}/js/screenshot.js"
+  if [[ -f "${PROJECT_ROOT}/js/chat_protocol.js" ]]; then
+    cp -f "${PROJECT_ROOT}/js/chat_protocol.js" "${UI_DIR}/js/chat_protocol.js"
+  fi
+  if [[ -f "${PROJECT_ROOT}/js/drive_protocol.js" ]]; then
+    cp -f "${PROJECT_ROOT}/js/drive_protocol.js" "${UI_DIR}/js/drive_protocol.js"
+  fi
   if [[ -d "${PROJECT_ROOT}/vendor/xterm" ]]; then
     cp -f "${PROJECT_ROOT}/vendor/xterm/"* "${UI_DIR}/vendor/xterm/"
   fi

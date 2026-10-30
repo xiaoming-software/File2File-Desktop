@@ -11,7 +11,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, Once, OnceLock};
 use std::thread;
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
@@ -656,15 +656,40 @@ pub async fn webrpc_open_session(
 pub async fn webrpc_send_data(
     session_id: u32,
     text: String,
+    msg_id: Option<String>,
     _state: tauri::State<'_, WebrpcApp>,
 ) -> Result<bool, String> {
     let handle = current_handle();
     if handle == 0 || session_id == 0 {
         return Ok(false);
     }
-    tauri::async_runtime::spawn_blocking(move || send_text_blocking(handle, session_id, text))
-        .await
-        .map_err(|err| err.to_string())?
+    let msg_id = msg_id.unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        send_text_blocking(handle, session_id, text, msg_id)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+/// Send an arbitrary numeric-typed chat JSON frame (ack / ping / pong / …).
+#[tauri::command]
+pub async fn webrpc_send_typed(
+    session_id: u32,
+    kind: u8,
+    data: serde_json::Value,
+    _state: tauri::State<'_, WebrpcApp>,
+) -> Result<bool, String> {
+    let handle = current_handle();
+    if handle == 0 || session_id == 0 {
+        return Ok(false);
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let payload = serde_json::json!({ "type": kind, "data": data });
+        let s = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+        Ok(send_json_bytes(handle, session_id, &s))
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
 
 #[tauri::command]
@@ -712,6 +737,7 @@ pub async fn webrpc_close_session(
         }
         stop_session_monitor(session_id);
         crate::nas::stop_watch(session_id);
+        crate::nas_media_proxy::stop(session_id);
         crate::tasks::on_session_dead(session_id);
         crate::voice::on_chat_session_dead(session_id);
         crate::videocall::on_chat_session_dead(session_id);
@@ -890,6 +916,9 @@ struct HelloData<'a> {
     session_id: u32,
     token: &'a str,
     permission: &'a str,
+    chat_proto: u32,
+    drive_proto: u32,
+    caps: Vec<&'a str>,
 }
 
 fn send_hello_blocking(handle: usize, session_id: u32) -> Result<(), String> {
@@ -911,6 +940,9 @@ fn send_hello_blocking(handle: usize, session_id: u32) -> Result<(), String> {
                 session_id,
                 token: &token,
                 permission: &permission,
+                chat_proto: 1,
+                drive_proto: 1,
+                caps: vec!["ack", "read", "driveResume"],
             },
         })
         .map_err(|_| "handshake-send-failed".to_string())?;
@@ -934,39 +966,47 @@ fn send_hello_blocking(handle: usize, session_id: u32) -> Result<(), String> {
 }
 
 #[derive(Serialize)]
-struct TextMessage<'a> {
+struct TextMessage {
     #[serde(rename = "type")]
     kind: u8,
-    data: &'a str,
+    data: serde_json::Value,
 }
 
-fn send_text_blocking(handle: usize, session_id: u32, text: String) -> Result<bool, String> {
+fn send_text_blocking(
+    handle: usize,
+    session_id: u32,
+    text: String,
+    msg_id: String,
+) -> Result<bool, String> {
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
-        let _ = (handle, session_id, text);
+        let _ = (handle, session_id, text, msg_id);
         return Ok(false);
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     {
-        let payload = serde_json::to_string(&TextMessage {
-            kind: 2,
-            data: &text,
-        })
-        .map_err(|_| "send-data-failed".to_string())?;
-        let data_c = CString::new(payload).map_err(|_| "send-data-failed".to_string())?;
-        let data_len = data_c.as_bytes().len() as i32;
-        let ret = unsafe {
-            WebrpcClient_SendData(
-                handle,
-                session_id,
-                data_c.as_ptr() as *mut c_char,
-                data_len,
-                SEND_DATA_TIMEOUT_MS,
-            )
+        let data = if msg_id.trim().is_empty() {
+            serde_json::Value::String(text)
+        } else {
+            let ts = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            serde_json::json!({
+                "msgId": msg_id,
+                "text": text,
+                "ts": ts,
+            })
         };
-        eprintln!("webrpc: SendData type=2 sessionId={session_id} ret={ret}");
-        Ok(ret == 1)
+        let payload = serde_json::to_string(&TextMessage { kind: 2, data })
+            .map_err(|_| "send-data-failed".to_string())?;
+        Ok(send_json_bytes_timeout(
+            handle,
+            session_id,
+            &payload,
+            SEND_DATA_TIMEOUT_MS,
+        ))
     }
 }
 
@@ -1013,6 +1053,9 @@ struct FileTransferEvent {
     speed_bps: u64,
     status: String,
     file_path: String,
+    /// True only after local SendFile / recv finish. Progress probes must stay false
+    /// so the JS send queue does not start the next file while this one still runs.
+    wire_complete: bool,
 }
 
 fn emit_file_event(event: FileTransferEvent) {
@@ -1076,6 +1119,7 @@ fn file_progress_event(
     started: Instant,
     complete: bool,
     file_path: String,
+    msg_id: String,
 ) -> FileTransferEvent {
     let received = from != "me" && complete;
     let (bytes, elapsed, speed) = if complete && size > 0 {
@@ -1089,7 +1133,7 @@ fn file_progress_event(
     };
     FileTransferEvent {
         session_id,
-        msg_id: String::new(),
+        msg_id,
         file_name,
         from: from.into(),
         transferred: bytes,
@@ -1104,6 +1148,7 @@ fn file_progress_event(
             "receiving".into()
         },
         file_path,
+        wire_complete: received || (from == "me" && complete),
     }
 }
 
@@ -1338,6 +1383,7 @@ fn send_file_job(
             speed_bps: speed_bps(last_bytes, started),
             status: "failed".into(),
             file_path: path,
+            wire_complete: true,
         };
         persist_file_event_with(&owner, &peer, &event);
         emit_file_event(event);
@@ -1368,8 +1414,11 @@ fn send_file_job(
         size,
         elapsed_ms: done_elapsed,
         speed_bps: done_speed,
-        status: if ok { "sent".into() } else { "failed".into() },
+        // Bytes on the wire ≠ delivered. Keep `sending` until peer type-20 ACK
+        // (JS maps ACK → `sent` / UI「未读」).
+        status: if ok { "sending".into() } else { "failed".into() },
         file_path: path,
+        wire_complete: true,
     };
     persist_file_event_with(&owner, &peer, &event);
     emit_file_event(event);
@@ -1645,6 +1694,10 @@ struct InboundHello {
     token: String,
     #[serde(default)]
     permission: String,
+    #[serde(default)]
+    chat_proto: u32,
+    #[serde(default)]
+    caps: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1652,6 +1705,37 @@ struct InboundHello {
 struct InboundText {
     session_id: u32,
     text: String,
+    #[serde(default)]
+    peer_token: String,
+    #[serde(default)]
+    msg_id: String,
+    #[serde(default)]
+    ts: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InboundDeliveryAck {
+    session_id: u32,
+    msg_id: String,
+    #[serde(default)]
+    peer_token: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InboundReadReceipt {
+    session_id: u32,
+    msg_ids: Vec<String>,
+    #[serde(default)]
+    peer_token: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InboundChatPulse {
+    session_id: u32,
+    t: u64,
     #[serde(default)]
     peer_token: String,
 }
@@ -1687,7 +1771,11 @@ fn handle_data_payload(frame_session_id: u32, payload: Vec<u8>) {
     };
     match value.get("type") {
         Some(t) if t.is_string() => match t.as_str().unwrap_or("") {
-            "backNasInfo" => crate::nas::emit_back_nas_info(frame_session_id, value.get("data").unwrap_or(&serde_json::Value::Null)),
+            "backNasInfo" => crate::nas::emit_back_nas_info_full(
+                frame_session_id,
+                value.get("data").unwrap_or(&serde_json::Value::Null),
+                &value,
+            ),
             "backPath" => crate::nas::emit_back_path(
                 frame_session_id,
                 value.get("data").unwrap_or(&serde_json::Value::Null),
@@ -1714,7 +1802,9 @@ fn handle_data_payload(frame_session_id: u32, payload: Vec<u8>) {
             "backSearchFile" => crate::nas::emit_back_search_file(frame_session_id, &value),
             "backZipFile" => crate::nas::emit_back_zip_file(frame_session_id, &value),
             "backThumb" => crate::nas::emit_back_thumb(frame_session_id, &value),
-            "getThumb" => {}
+            "backStat" => crate::nas_media_proxy::on_back_stat(frame_session_id, &value),
+            "backRange" => crate::nas_media_proxy::on_back_range(frame_session_id, &value),
+            "getThumb" | "statFile" | "readRange" => {}
             _ => {}
         },
         Some(t) if t.is_number() => {
@@ -1736,6 +1826,14 @@ fn handle_data_payload(frame_session_id: u32, payload: Vec<u8>) {
                 9 => crate::desktop::on_input(frame_session_id, data),
                 11 => crate::voice::on_voice_session_signal(frame_session_id, data),
                 12 => crate::videocall::on_session_signal(frame_session_id, data),
+                // Reliable chat control (20/21/22/25) — not videocall 12.
+                20 => handle_delivery_ack(frame_session_id, data),
+                21 => handle_chat_ping(frame_session_id, data),
+                22 => handle_chat_pong(frame_session_id, data),
+                // Drive heartbeat (23/24).
+                23 => handle_drive_ping(frame_session_id, data),
+                24 => handle_drive_pong(frame_session_id, data),
+                25 => handle_read_receipt(frame_session_id, data),
                 _ => {}
             }
         }
@@ -1787,14 +1885,34 @@ fn handle_text_payload(session_id: u32, data: serde_json::Value) {
     if session_id == 0 {
         return;
     }
-    let Some(text) = data.as_str() else {
+    let (text, msg_id, ts) = if let Some(s) = data.as_str() {
+        (s.to_string(), String::new(), 0u64)
+    } else if let Some(obj) = data.as_object() {
+        let text = obj
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let msg_id = obj
+            .get("msgId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let ts = obj.get("ts").and_then(json_u64).unwrap_or(0);
+        (text, msg_id, ts)
+    } else {
         return;
     };
+    if text.is_empty() && msg_id.is_empty() {
+        return;
+    }
     let peer_token = peer_token_of(session_id);
     eprintln!(
-        "webrpc: peer text sessionId={} peer={} bytes={}",
+        "webrpc: peer text sessionId={} peer={} msgId={} bytes={}",
         session_id,
         peer_token,
+        msg_id,
         text.len()
     );
     if let Some(app) = APP_HANDLE.get() {
@@ -1802,8 +1920,140 @@ fn handle_text_payload(session_id: u32, data: serde_json::Value) {
             "webrpc-peer-text",
             InboundText {
                 session_id,
-                text: text.to_string(),
+                text,
                 peer_token,
+                msg_id,
+                ts,
+            },
+        );
+    }
+}
+
+fn handle_delivery_ack(session_id: u32, data: serde_json::Value) {
+    if session_id == 0 {
+        return;
+    }
+    let msg_id = data
+        .get("msgId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if msg_id.is_empty() {
+        return;
+    }
+    if let Some(app) = APP_HANDLE.get() {
+        let _ = app.emit(
+            "webrpc-delivery-ack",
+            InboundDeliveryAck {
+                session_id,
+                msg_id,
+                peer_token: peer_token_of(session_id),
+            },
+        );
+    }
+}
+
+fn handle_read_receipt(session_id: u32, data: serde_json::Value) {
+    if session_id == 0 {
+        return;
+    }
+    let mut msg_ids: Vec<String> = data
+        .get("msgIds")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| item.as_str().map(|s| s.trim().to_string()))
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    if msg_ids.is_empty() {
+        if let Some(one) = data.get("msgId").and_then(|v| v.as_str()) {
+            let id = one.trim().to_string();
+            if !id.is_empty() {
+                msg_ids.push(id);
+            }
+        }
+    }
+    if msg_ids.is_empty() {
+        return;
+    }
+    if let Some(app) = APP_HANDLE.get() {
+        let _ = app.emit(
+            "webrpc-read-receipt",
+            InboundReadReceipt {
+                session_id,
+                msg_ids,
+                peer_token: peer_token_of(session_id),
+            },
+        );
+    }
+}
+
+fn handle_chat_ping(session_id: u32, data: serde_json::Value) {
+    if session_id == 0 {
+        return;
+    }
+    let t = data.get("t").and_then(json_u64).unwrap_or(0);
+    if let Some(app) = APP_HANDLE.get() {
+        let _ = app.emit(
+            "webrpc-chat-ping",
+            InboundChatPulse {
+                session_id,
+                t,
+                peer_token: peer_token_of(session_id),
+            },
+        );
+    }
+}
+
+fn handle_chat_pong(session_id: u32, data: serde_json::Value) {
+    if session_id == 0 {
+        return;
+    }
+    let t = data.get("t").and_then(json_u64).unwrap_or(0);
+    if let Some(app) = APP_HANDLE.get() {
+        let _ = app.emit(
+            "webrpc-chat-pong",
+            InboundChatPulse {
+                session_id,
+                t,
+                peer_token: peer_token_of(session_id),
+            },
+        );
+    }
+}
+
+fn handle_drive_ping(session_id: u32, data: serde_json::Value) {
+    if session_id == 0 {
+        return;
+    }
+    let t = data.get("t").and_then(json_u64).unwrap_or(0);
+    if let Some(app) = APP_HANDLE.get() {
+        let _ = app.emit(
+            "webrpc-drive-ping",
+            InboundChatPulse {
+                session_id,
+                t,
+                peer_token: peer_token_of(session_id),
+            },
+        );
+    }
+}
+
+fn handle_drive_pong(session_id: u32, data: serde_json::Value) {
+    if session_id == 0 {
+        return;
+    }
+    let t = data.get("t").and_then(json_u64).unwrap_or(0);
+    if let Some(app) = APP_HANDLE.get() {
+        let _ = app.emit(
+            "webrpc-drive-pong",
+            InboundChatPulse {
+                session_id,
+                t,
+                peer_token: peer_token_of(session_id),
             },
         );
     }
@@ -1829,7 +2079,7 @@ fn handle_file_query(session_id: u32, data: serde_json::Value) {
         .unwrap_or("")
         .trim()
         .to_string();
-    let (bytes, started, complete, dest) = {
+    let (bytes, started, complete, dest, xfer_id) = {
         let mut map = recv_tasks().lock().unwrap_or_else(|err| err.into_inner());
         let state = map
             .entry((session_id, file_name.clone()))
@@ -1850,8 +2100,9 @@ fn handle_file_query(session_id: u32, data: serde_json::Value) {
         let complete = state.size > 0 && state.bytes >= state.size;
         let bytes = state.bytes;
         let started = state.started;
+        let xfer_id = state.xfer_id.clone();
         let dest = incoming_dest(session_id, &file_name);
-        (bytes, started, complete, dest)
+        (bytes, started, complete, dest, xfer_id)
     };
     let handle = current_handle();
     if handle != 0 {
@@ -1866,6 +2117,7 @@ fn handle_file_query(session_id: u32, data: serde_json::Value) {
         started,
         complete,
         dest,
+        xfer_id,
     );
     persist_file_event_async(event.clone());
     emit_file_event(event);
@@ -1905,17 +2157,25 @@ fn handle_file_reply(session_id: u32, data: serde_json::Value) {
     if cancelled {
         return;
     }
+    // While SendFile is still running, never report full size — that used to
+    // release the JS send queue and start a second concurrent SendFile.
+    let shown = if size > 0 && transferred >= size {
+        size.saturating_sub(1)
+    } else {
+        transferred
+    };
     let event = FileTransferEvent {
         session_id,
         msg_id,
         file_name,
         from: "me".into(),
-        transferred,
+        transferred: shown,
         size,
         elapsed_ms: elapsed_ms(started),
-        speed_bps: speed_bps(transferred, started),
+        speed_bps: speed_bps(shown.max(1), started),
         status: "sending".into(),
         file_path: String::new(),
+        wire_complete: false,
     };
     persist_file_event_async(event.clone());
     emit_file_event(event);
@@ -1995,14 +2255,20 @@ fn handle_file_stream(session_id: u32, stream: &mut TcpStream) -> io::Result<()>
     out.flush()?;
     drop(out);
 
-    let (bytes, size, started, complete) = {
+    let (bytes, size, started, complete, xfer_id) = {
         let mut map = recv_tasks().lock().unwrap_or_else(|err| err.into_inner());
         let state = map
             .entry(key)
             .or_insert_with(|| new_recv_state(0));
         state.bytes = state.bytes.saturating_add(chunk_len);
         let complete = state.size > 0 && state.bytes >= state.size;
-        (state.bytes, state.size, state.started, complete)
+        (
+            state.bytes,
+            state.size,
+            state.started,
+            complete,
+            state.xfer_id.clone(),
+        )
     };
 
     let event = file_progress_event(
@@ -2014,6 +2280,7 @@ fn handle_file_stream(session_id: u32, stream: &mut TcpStream) -> io::Result<()>
         started,
         complete,
         dest.to_string_lossy().into_owned(),
+        xfer_id,
     );
     if complete {
         persist_file_event_async(event.clone());

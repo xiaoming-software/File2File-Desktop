@@ -25,8 +25,9 @@ log() { echo "[INFO] $*"; }
 err() { echo "[ERROR] $*" >&2; }
 
 prepare_frontend() {
-  # 前端源文件在仓库根目录 js/、css/；会同步覆盖到 ui/（Tauri frontendDist）。
-  # 改界面请改 js/app.js、css/app.css，不要只改 ui/（下次构建会被覆盖）。
+  # 前端源文件在仓库根目录 js/、css/、index.html；会同步覆盖到 ui/（Tauri frontendDist）。
+  # 改界面请改根目录 js/app.js、css/app.css、index.html，不要只改 ui/（下次构建会被覆盖）。
+  # chat_protocol.js / drive_protocol.js 也在根目录 js/，构建时一并拷入 ui/js/。
   if [[ ! -f "${PROJECT_ROOT}/index.html" ]]; then
     err "找不到 ${PROJECT_ROOT}/index.html"
     exit 1
@@ -40,6 +41,12 @@ prepare_frontend() {
   cp -f "${PROJECT_ROOT}/js/app.js" "${ui_dir}/js/app.js"
   cp -f "${PROJECT_ROOT}/js/i18n.js" "${ui_dir}/js/i18n.js"
   cp -f "${PROJECT_ROOT}/js/screenshot.js" "${ui_dir}/js/screenshot.js"
+  if [[ -f "${PROJECT_ROOT}/js/chat_protocol.js" ]]; then
+    cp -f "${PROJECT_ROOT}/js/chat_protocol.js" "${ui_dir}/js/chat_protocol.js"
+  fi
+  if [[ -f "${PROJECT_ROOT}/js/drive_protocol.js" ]]; then
+    cp -f "${PROJECT_ROOT}/js/drive_protocol.js" "${ui_dir}/js/drive_protocol.js"
+  fi
   if [[ -d "${PROJECT_ROOT}/vendor/xterm" ]]; then
     cp -f "${PROJECT_ROOT}/vendor/xterm/"* "${ui_dir}/vendor/xterm/"
   fi

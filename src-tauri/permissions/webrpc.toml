@@ -6,6 +6,7 @@ commands.allow = [
   "webrpc_logout",
   "webrpc_open_session",
   "webrpc_send_data",
+  "webrpc_send_typed",
   "webrpc_send_file",
   "webrpc_close_session",
   "nas_watch_start",

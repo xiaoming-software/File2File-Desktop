@@ -506,9 +506,17 @@ pub struct NasInfoEvent {
     pub disk_size: u64,
     pub banlen_size: u64,
     pub file_num: u64,
+    #[serde(default)]
+    pub drive_proto: u32,
+    #[serde(default)]
+    pub caps: Vec<String>,
 }
 
-pub fn emit_back_nas_info(session_id: u32, data: &serde_json::Value) {
+pub fn emit_back_nas_info_full(
+    session_id: u32,
+    data: &serde_json::Value,
+    root: &serde_json::Value,
+) {
     if session_id == 0 {
         return;
     }
@@ -518,8 +526,23 @@ pub fn emit_back_nas_info(session_id: u32, data: &serde_json::Value) {
         .get("fileNum")
         .and_then(|v| v.as_u64().or_else(|| v.as_i64().map(|n| n.max(0) as u64)))
         .unwrap_or(0);
+    let drive_proto = root
+        .get("driveProto")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32;
+    let caps: Vec<String> = root
+        .get("caps")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|c| c.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let resume = caps.iter().any(|c| c == "driveResume");
+    crate::tasks::set_resume_cap(session_id, resume);
     eprintln!(
-        "webrpc: backNasInfo session={session_id} disk={disk_size} free={banlen_size} files={file_num}"
+        "webrpc: backNasInfo session={session_id} disk={disk_size} free={banlen_size} files={file_num} driveProto={drive_proto} resume={resume}"
     );
     if let Some(app) = webrpc::app_handle() {
         let _ = app.emit(
@@ -529,6 +552,8 @@ pub fn emit_back_nas_info(session_id: u32, data: &serde_json::Value) {
                 disk_size,
                 banlen_size,
                 file_num,
+                drive_proto,
+                caps,
             },
         );
     }
@@ -642,6 +667,8 @@ pub fn emit_back_path(session_id: u32, data: &serde_json::Value, path: &str) {
         entries.len()
     );
     emit_path_event(session_id, true, entries.clone(), dir.clone());
+    // First successful listing → start local HTTP media proxy for this drive session.
+    crate::nas_media_proxy::ensure_started(session_id);
     if is_browse && !session_network_busy(session_id) {
         prefetch_thumbs(session_id, &dir, &entries);
     }
@@ -1926,6 +1953,7 @@ pub fn stop_watch(session_id: u32) {
         g.thumb_failed.retain(|(sid, _, _)| *sid != session_id);
         g.pending.remove(&session_id)
     };
+    crate::nas_media_proxy::stop(session_id);
     storage::delete_drive_temp_session(session_id);
     eprintln!("webrpc: nas watch stop session={session_id}");
 }

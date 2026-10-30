@@ -5,6 +5,8 @@ mod chats;
 mod dragout;
 mod drives;
 mod nas;
+mod nas_media_proxy;
+mod nas_mpv;
 mod tasks;
 mod sessions;
 mod screenshot;
@@ -39,10 +41,16 @@ fn main() {
             webrpc::webrpc_logout,
             webrpc::webrpc_open_session,
             webrpc::webrpc_send_data,
+            webrpc::webrpc_send_typed,
             webrpc::webrpc_send_file,
             webrpc::webrpc_close_session,
             nas::nas_watch_start,
             nas::nas_watch_stop,
+            nas_media_proxy::nas_media_proxy_info,
+            nas_media_proxy::nas_media_stream_url,
+            nas_mpv::nas_mpv_available,
+            nas_mpv::nas_mpv_play,
+            nas_mpv::nas_mpv_stop,
             nas::nas_list_path,
             nas::nas_create_entry,
             nas::nas_move_entry,

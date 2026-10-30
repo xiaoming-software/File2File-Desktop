@@ -1257,12 +1257,10 @@ html.is-tauri .titlebar {
   overflow: hidden;
 }
 
-.session-section.is-chat {
-  flex: 0 0 50%;
-}
-
-.session-section.is-drive {
-  flex: 1 1 0;
+.session-section.is-chat,
+.session-section.is-drive,
+.session-section.is-p2pssh {
+  flex: 0 0 auto;
 }
 
 .session-split {
@@ -1363,7 +1361,7 @@ html.is-tauri .titlebar {
 }
 
 .session-row.is-menu-open {
-  z-index: 8;
+  z-index: 30;
 }
 
 .session-item {
@@ -1455,12 +1453,33 @@ html.is-tauri .titlebar {
 }
 
 .session-item-title {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   font-size: 13px;
   font-weight: 650;
+}
+
+.session-item-title-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.session-unread {
+  flex-shrink: 0;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #f04438;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
 }
 
 .session-item-sub {
@@ -4326,10 +4345,9 @@ body.has-office-dock .nas-files {
 }
 
 .session-dropdown {
-  position: absolute;
-  top: calc(100% - 2px);
-  right: 8px;
-  z-index: 9;
+  /* Fixed + JS placement so menus are not clipped by session-list overflow. */
+  position: fixed;
+  z-index: 120;
   min-width: 140px;
   padding: 4px;
   background: #fff;

@@ -78,6 +78,8 @@ struct TaskState {
     uploads: HashMap<u32, LiveXfer>,
     downloads: HashMap<u32, LiveXfer>,
     put_wait: HashMap<u32, mpsc::Sender<PutDone>>,
+    /// peerToken (drive) supports put/get offset resume.
+    resume_ok: HashMap<DriveKey, bool>,
 }
 
 pub(crate) struct PutDone {
@@ -253,6 +255,20 @@ fn transfer_alive(session_id: u32) -> bool {
     session_active(session_id) && nas::is_drive_session(session_id)
 }
 
+pub fn set_resume_cap(session_id: u32, ok: bool) {
+    if session_id == 0 {
+        return;
+    }
+    let mut g = lock();
+    if let Some(key) = g.sessions.get(&session_id).cloned() {
+        g.resume_ok.insert(key, ok);
+    }
+}
+
+fn resume_enabled(key: &DriveKey) -> bool {
+    lock().resume_ok.get(key).copied().unwrap_or(false)
+}
+
 fn pump_gen(key: &DriveKey) -> u64 {
     lock().gens.get(key).copied().unwrap_or(0)
 }
@@ -263,6 +279,19 @@ fn fail_open_tasks(key: &DriveKey, error: &str) {
             if task.status == "queued" || task.status == "running" || task.status == "interrupted" {
                 task.status = "failed".into();
                 task.error = error.into();
+                task.updated_at = now_ms();
+            }
+        }
+    });
+}
+
+/// Soft disconnect: keep progress and re-queue for resume after rebind.
+fn interrupt_open_tasks(key: &DriveKey) {
+    with_tasks(key, |list| {
+        for task in list {
+            if task.status == "running" || task.status == "queued" {
+                task.status = "interrupted".into();
+                task.error.clear();
                 task.updated_at = now_ms();
             }
         }
@@ -331,7 +360,7 @@ fn take_or_stop(key: &DriveKey, gen: u64) -> Option<(u32, NasTask)> {
     };
     task.status = "running".into();
     task.error.clear();
-    task.transferred = 0;
+    // Keep transferred for offset resume after interrupt/rebind.
     task.elapsed_ms = 0;
     task.speed_bps = 0;
     task.updated_at = now_ms();
@@ -421,7 +450,7 @@ fn wait_preview_idle(session_id: u32) {
 
 fn run_task(key: &DriveKey, session_id: u32, task: NasTask) {
     if !transfer_alive(session_id) {
-        finish_task(key, &task.id, "failed", FAIL_CLOSED, 0, Instant::now());
+        finish_task(key, &task.id, "interrupted", "", task.transferred, Instant::now());
         return;
     }
     {
@@ -433,7 +462,7 @@ fn run_task(key: &DriveKey, session_id: u32, task: NasTask) {
         let mut g = lock();
         g.busy.remove(&session_id);
         drop(g);
-        finish_task(key, &task.id, "failed", FAIL_CLOSED, 0, Instant::now());
+        finish_task(key, &task.id, "interrupted", "", task.transferred, Instant::now());
         return;
     }
     let started = Instant::now();
@@ -442,22 +471,32 @@ fn run_task(key: &DriveKey, session_id: u32, task: NasTask) {
     } else {
         run_download(key, session_id, &task, started)
     };
-    {
+    let live_bytes = {
         let mut g = lock();
         g.busy.remove(&session_id);
+        let bytes = g
+            .uploads
+            .get(&session_id)
+            .or_else(|| g.downloads.get(&session_id))
+            .map(|x| x.bytes)
+            .unwrap_or(task.transferred);
         g.uploads.remove(&session_id);
         g.downloads.remove(&session_id);
-    }
+        bytes
+    };
     nas::clear_task_pending(session_id);
     if !transfer_alive(session_id) {
-        finish_task(key, &task.id, "failed", FAIL_CLOSED, 0, started);
+        finish_task(key, &task.id, "interrupted", "", live_bytes, started);
         return;
     }
     match result {
         Ok(bytes) => finish_task(key, &task.id, "done", "", bytes, started),
         Err(err) => {
-            let msg = if err == "已中断" { FAIL_CLOSED } else { &err };
-            finish_task(key, &task.id, "failed", msg, 0, started);
+            if err == FAIL_CLOSED || err == "已中断" {
+                finish_task(key, &task.id, "interrupted", "", live_bytes, started);
+            } else {
+                finish_task(key, &task.id, "failed", &err, live_bytes, started);
+            }
         }
     }
 }
@@ -486,15 +525,43 @@ fn run_upload(
         item.name = name.clone();
         item.nas_path = dir.clone();
     });
+    let mut offset = 0u64;
+    if resume_enabled(key) && task.transferred > 0 && task.transferred < size {
+        offset = task.transferred;
+    }
     let out = storage::drive_out_file(session_id, &dir, &name)?;
-    std::fs::copy(&src, &out).map_err(|err| format!("准备上传失败: {err}"))?;
-    let payload = serde_json::json!({
+    if offset == 0 {
+        std::fs::copy(&src, &out).map_err(|err| format!("准备上传失败: {err}"))?;
+    } else {
+        // Slice remaining bytes — webrpc SendFile has no offset.
+        let mut input = std::fs::File::open(&src).map_err(|err| format!("打开源文件失败: {err}"))?;
+        use std::io::{Read, Seek, SeekFrom, Write};
+        input
+            .seek(SeekFrom::Start(offset))
+            .map_err(|err| format!("定位续传失败: {err}"))?;
+        let mut output =
+            std::fs::File::create(&out).map_err(|err| format!("准备上传失败: {err}"))?;
+        let mut buf = [0u8; 1024 * 1024];
+        loop {
+            let n = input.read(&mut buf).map_err(|err| format!("读取失败: {err}"))?;
+            if n == 0 {
+                break;
+            }
+            output
+                .write_all(&buf[..n])
+                .map_err(|err| format!("写入失败: {err}"))?;
+        }
+    }
+    let mut payload = serde_json::json!({
         "type": "putFile",
         "fileName": name,
         "filePath": dir,
         "size": size,
-    })
-    .to_string();
+    });
+    if offset > 0 {
+        payload["offset"] = serde_json::json!(offset);
+    }
+    let payload = payload.to_string();
     let rx = watch_put(session_id);
     if !webrpc::send_json_timeout(session_id, &payload, GET_FILE_TIMEOUT_MS) {
         lock().put_wait.remove(&session_id);
@@ -504,7 +571,7 @@ fn run_upload(
         lock().put_wait.remove(&session_id);
         return Err(FAIL_CLOSED.into());
     }
-    if size > 0 {
+    if size > offset {
         {
             let mut g = lock();
             g.uploads.insert(
@@ -513,11 +580,11 @@ fn run_upload(
                     task_id: task.id.clone(),
                     started,
                     size,
-                    bytes: 0,
+                    bytes: offset,
                 },
             );
         }
-        progress(key, &task.id, 0, started, size);
+        progress(key, &task.id, offset, started, size);
         spawn_live_ticker(session_id);
         thread::sleep(Duration::from_millis(80));
         if !transfer_alive(session_id) {
@@ -560,7 +627,19 @@ fn run_download(
         std::fs::write(&dest, []).map_err(|err| format!("保存失败: {err}"))?;
         return Ok(0);
     }
-    let _ = std::fs::remove_file(&dest);
+    let mut offset = 0u64;
+    if dest.exists() {
+        let have = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
+        if task.has_size && have >= task.size && task.size > 0 {
+            return Ok(have);
+        }
+        if resume_enabled(key) && have > 0 && (!task.has_size || have < task.size) {
+            offset = have;
+        } else {
+            let _ = std::fs::remove_file(&dest);
+            offset = 0;
+        }
+    }
     {
         let mut g = lock();
         g.downloads.insert(
@@ -569,7 +648,7 @@ fn run_download(
                 task_id: task.id.clone(),
                 started,
                 size: task.size,
-                bytes: 0,
+                bytes: offset,
             },
         );
     }
@@ -582,13 +661,16 @@ fn run_download(
         Some(dest.clone()),
         true,
     );
-    let payload = serde_json::json!({
+    let mut payload = serde_json::json!({
         "type": "getFile",
         "fileName": name,
         "filePath": dir,
-    })
-    .to_string();
-    eprintln!("webrpc: task getFile session={session_id} path={dir} name={name}");
+    });
+    if offset > 0 {
+        payload["offset"] = serde_json::json!(offset);
+    }
+    let payload = payload.to_string();
+    eprintln!("webrpc: task getFile session={session_id} path={dir} name={name} offset={offset}");
     if !transfer_alive(session_id) {
         return Err(FAIL_CLOSED.into());
     }
@@ -849,8 +931,8 @@ pub fn on_session_dead(session_id: u32) {
     };
     nas::clear_task_pending(session_id);
     if let Some(key) = key {
-        fail_open_tasks(&key, FAIL_CLOSED);
-        eprintln!("webrpc: nas tasks recycled session={session_id}");
+        interrupt_open_tasks(&key);
+        eprintln!("webrpc: nas tasks interrupted session={session_id} (await rebind)");
     }
 }
 
@@ -887,6 +969,15 @@ pub fn nas_task_list(owner_token: String, peer_token: String) -> Result<Vec<NasT
 pub fn nas_task_bind(owner_token: String, peer_token: String, session_id: u32) -> Result<Vec<NasTask>, String> {
     let key = drive_key(&owner_token, &peer_token)?;
     bind_session(key.clone(), session_id);
+    with_tasks(&key, |list| {
+        for task in list {
+            if task.status == "interrupted" {
+                task.status = "queued".into();
+                task.error.clear();
+                task.updated_at = now_ms();
+            }
+        }
+    });
     let list = cached_tasks(&key);
     kick(key);
     Ok(list)

@@ -34,6 +34,12 @@ pub struct SavedMessage {
     pub speed_bps: u64,
     #[serde(default)]
     pub file_path: String,
+    /// Peer→me: false until this bubble was shown; missing in old JSON ⇒ None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seen_by_me: Option<bool>,
+    /// Local outbox: seen but type-25 not yet sent (or needs resend after reconnect).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_receipt_pending: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -105,8 +111,12 @@ fn can_replace_status(old: &str, new: &str) -> bool {
     if old == "failed" {
         return true;
     }
-    if old == "sent" {
+    // Own text: sending → sent → read (read receipts must persist).
+    if old == "read" {
         return false;
+    }
+    if old == "sent" {
+        return new == "read" || new == "failed";
     }
     if old == "received" {
         return new == "receiving";
@@ -256,6 +266,8 @@ fn persist_transfer_inner(
             elapsed_ms,
             speed_bps,
             file_path: file_path.to_string(),
+            seen_by_me: None,
+            read_receipt_pending: None,
         };
         finalize_complete_file(&mut message);
         list.push(message);
@@ -273,6 +285,8 @@ fn persist_transfer_inner(
             elapsed_ms,
             speed_bps,
             file_path: file_path.to_string(),
+            seen_by_me: Some(false),
+            read_receipt_pending: None,
         };
         finalize_complete_file(&mut message);
         list.push(message);
@@ -298,7 +312,27 @@ fn upsert_message(list: &mut Vec<SavedMessage>, message: SavedMessage) {
     let mut message = message;
     finalize_complete_file(&mut message);
     if let Some(item) = list.iter_mut().find(|item| item.id == message.id) {
+        // Always allow seenByMe / readReceiptPending updates even when status is locked.
+        if message.seen_by_me.is_some() {
+            item.seen_by_me = message.seen_by_me;
+        }
+        if message.read_receipt_pending.is_some() {
+            item.read_receipt_pending = message.read_receipt_pending;
+        }
         if !can_replace_status(&item.status, &message.status) {
+            // Still refresh non-status fields when status cannot advance.
+            if !message.content.is_empty() {
+                item.content = message.content.clone();
+            }
+            if !message.file_path.is_empty() {
+                item.file_path = message.file_path.clone();
+            }
+            if message.size > 0 {
+                item.size = message.size;
+            }
+            item.transferred = message.transferred;
+            item.elapsed_ms = message.elapsed_ms;
+            item.speed_bps = message.speed_bps;
             return;
         }
         *item = message;
