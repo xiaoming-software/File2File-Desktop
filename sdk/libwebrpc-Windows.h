@@ -87,32 +87,16 @@ typedef struct { void *data; GoInt len; GoInt cap; } GoSlice;
 extern "C" {
 #endif
 
-
-// 创建客户端，返回句柄
-// / 【修改】WebrpcClient_New 增加 callback 参数
-//
-extern __declspec(dllexport) GoUintptr WebrpcClient_New(char* token, char* passwd, char* permission);
-
-// 检查登录状态
-//
-extern __declspec(dllexport) int WebrpcClient_LoginStatus(GoUintptr handle);
-
-// 获取会独爱tcp端口号
-//
-extern __declspec(dllexport) int WebrpcClient_GetReceivePort(GoUintptr handle);
-
-// 打开会话
-//
-extern __declspec(dllexport) unsigned int WebrpcClient_OpenSession(GoUintptr handle, char* toToken, char* permission);
-extern __declspec(dllexport) short unsigned int WebrpcClient_SessionSize(GoUintptr handle);
-extern __declspec(dllexport) char* WebrpcClient_TarTokenBySession(GoUintptr handle, unsigned int sessionId);
-extern __declspec(dllexport) int WebrpcClient_CloseSession(GoUintptr handle, unsigned int sessionId);
-extern __declspec(dllexport) int WebrpcClient_SendData(GoUintptr handle, unsigned int sessionId, char* data, int dataLen, long long int timeOut);
-extern __declspec(dllexport) int WebrpcClient_SendFile(GoUintptr handle, unsigned int sessionId, char* filePath);
-
-// 关闭客户端
-//
-extern __declspec(dllexport) void WebrpcClient_Free(GoUintptr handle);
+extern GoUintptr WebrpcClient_New(char* token, char* passwd, char* permission);
+extern int WebrpcClient_LoginStatus(GoUintptr handle);
+extern int WebrpcClient_GetReceivePort(GoUintptr handle);
+extern unsigned int WebrpcClient_OpenSession(GoUintptr handle, char* toToken, char* permission);
+extern short unsigned int WebrpcClient_SessionSize(GoUintptr handle);
+extern char* WebrpcClient_TarTokenBySession(GoUintptr handle, unsigned int sessionId);
+extern int WebrpcClient_CloseSession(GoUintptr handle, unsigned int sessionId);
+extern int WebrpcClient_SendData(GoUintptr handle, unsigned int sessionId, char* data, int dataLen, long long int timeOut);
+extern int WebrpcClient_SendFile(GoUintptr handle, unsigned int sessionId, char* filePath);
+extern void WebrpcClient_Free(GoUintptr handle);
 
 #ifdef __cplusplus
 }
